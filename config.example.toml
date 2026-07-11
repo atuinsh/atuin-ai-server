@@ -1,0 +1,36 @@
+# Example operator config for the standalone CLI chat server.
+# Start with: CHAT_CONFIG=config.toml mix run --no-halt
+
+port = 8080
+
+# The OpenAI-compatible chat-completions endpoint — Ollama, vLLM,
+# LM Studio, llama.cpp, LiteLLM, or a compatible cloud API. Accepted with
+# or without the trailing /chat/completions; a query string is passed
+# through (e.g. Azure's ?api-version=...).
+endpoint = "http://localhost:11434/v1"
+
+default_model = "llama"
+
+# Optional. Without it, no Authorization header is sent (local engines).
+# The secret stays in the environment; the config only names the variable.
+# [api_key]
+# env = "CHAT_API_KEY"
+
+# Optional. Replaces the default `Authorization = "Bearer {{api_key}}"`
+# entirely — spell out every auth header you need. {{api_key}} expands
+# wherever it appears.
+# [request.headers]
+# api-key = "{{api_key}}"
+
+# Optional extra chat-completions body fields for engines that take them.
+# stream/model/messages/tools are owned by the server and rejected here.
+# Most engines (Ollama, vLLM, ...) only report token usage on streams
+# when asked:
+[request.body]
+stream_options = { include_usage = true }
+
+[[models]]
+alias = "llama"
+name = "Llama 3.2"
+description = "Local llama3.2 via Ollama"
+model = "llama3.2"
