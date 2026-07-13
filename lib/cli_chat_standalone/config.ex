@@ -83,10 +83,7 @@ defmodule CliChatStandalone.Config do
     end
 
     case System.cmd(bin, args) do
-      {value, exit} -> case exit do
-        0 -> {:some, value |> String.trim}
-        n -> raise "api_key cmd failed with exit code #{n}"
-      end
+      {value, _exit} -> {:some, String.trim(value)}
     end
   end
 
