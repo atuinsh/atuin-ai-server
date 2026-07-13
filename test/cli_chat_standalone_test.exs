@@ -20,6 +20,23 @@ defmodule CliChatStandaloneTest do
       # process registered under a well-known name.
       send(Process.whereis(:upstream_inspector), {:upstream_request, conn})
 
+      case conn.body_params["model"] do
+        "missing-model" -> not_found(conn)
+        _ -> canned_stream(conn)
+      end
+    end
+
+    # The Ollama shape for an unknown model: a whole (non-streamed) 404.
+    defp not_found(conn) do
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(
+        404,
+        ~s({"error":{"message":"model \\"missing-model\\" not found, try pulling it first","type":"api_error"}})
+      )
+    end
+
+    defp canned_stream(conn) do
       chunks = [
         ~s({"choices":[{"delta":{"role":"assistant","content":"Hello"}}]}),
         ~s({"choices":[{"delta":{"content":" from upstream"}}]}),
@@ -65,6 +82,12 @@ defmodule CliChatStandaloneTest do
     name = "Canned Model"
     description = "The fake upstream"
     model = "canned-model-v1"
+
+    [[models]]
+    alias = "missing"
+    name = "Missing Model"
+    description = "The upstream 404s this one"
+    model = "missing-model"
     """)
 
     on_exit(fn -> File.rm(config_path) end)
@@ -97,6 +120,11 @@ defmodule CliChatStandaloneTest do
                  "alias" => "canned",
                  "name" => "Canned Model",
                  "description" => "The fake upstream"
+               },
+               %{
+                 "alias" => "missing",
+                 "name" => "Missing Model",
+                 "description" => "The upstream 404s this one"
                }
              ]
            }
@@ -134,6 +162,34 @@ defmodule CliChatStandaloneTest do
     assert upstream_conn.body_params["special_param"] == true
     assert upstream_conn.body_params["stream"] == true
     assert Plug.Conn.get_req_header(upstream_conn, "authorization") == []
+  end
+
+  test "an upstream HTTP error fails the turn fast with the status and body", %{
+    server_port: port
+  } do
+    body =
+      JSON.encode!(%{
+        "messages" => [%{"role" => "user", "content" => "hi"}],
+        "config" => %{"model" => "missing"}
+      })
+
+    # Well under the driver's 60s inactivity deadline: the failure must
+    # come from the upstream's response, not from waiting out a timeout.
+    task =
+      Task.async(fn ->
+        :httpc.request(
+          :post,
+          {~c"http://localhost:#{port}/api/cli/chat", [], ~c"application/json", body},
+          [],
+          []
+        )
+      end)
+
+    {:ok, {{_, 200, _}, _headers, response}} = Task.await(task, 5000)
+    response = to_string(response)
+
+    assert response =~ "HTTP 404"
+    assert response =~ "not found, try pulling it first"
   end
 
   test "unknown model alias is a 400", %{server_port: port} do
