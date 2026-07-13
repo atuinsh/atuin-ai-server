@@ -12,9 +12,16 @@ endpoint = "http://localhost:11434/v1"
 default_model = "llama"
 
 # Optional. Without it, no Authorization header is sent (local engines).
-# The secret stays in the environment; the config only names the variable.
+# Three forms — inline, from the environment, or from a command's stdout
+# (e.g. a password manager):
+#
+# api_key = "sk-..."
+#
 # [api_key]
 # env = "CHAT_API_KEY"
+#
+# [api_key]
+# cmd = { run = "op", args = ["read", "op://vault/item/key"] }
 
 # Optional. Replaces the default `Authorization = "Bearer {{api_key}}"`
 # entirely — spell out every auth header you need. {{api_key}} expands
