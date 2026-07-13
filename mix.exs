@@ -1,9 +1,11 @@
 defmodule Mix.Tasks.Compile.Gleam do
   @shortdoc "Compiles the shared CLI chat engine"
   @moduledoc """
-  Mix compiler for the shared Gleam engine in `../gleam_cli_chat_core`.
-  Registered via `compilers: [:gleam] ++ Mix.compilers()` so the engine is
-  built and on the code path before Elixir compiles. Defined here in
+  Mix compiler for the shared Gleam engine, fetched by mix as an inert
+  git dependency (`compile: false, app: false` — mix owns fetching and
+  pinning, gleam owns building, this task bridges). Registered via
+  `compilers: [:gleam] ++ Mix.compilers()` so the engine is built and on
+  the code path before Elixir compiles. Defined here in
   mix.exs (not lib/) because project code isn't compiled yet when the
   compiler list is first consulted. `normalize_app_specs!/0` rewrites the
   gleam-generated `.app` files (populating `modules`, stripping dev-deps)
@@ -13,7 +15,7 @@ defmodule Mix.Tasks.Compile.Gleam do
 
   use Mix.Task.Compiler
 
-  @core_dir "../gleam_cli_chat_core"
+  @core_dir "deps/atuin_ai_core"
   # `gleam build` only has a dev profile; the release reads each app's
   # `.app` straight from this directory after normalize_app_specs!/0.
   @build_dir Path.join([@core_dir, "build", "dev", "erlang"])
@@ -27,6 +29,10 @@ defmodule Mix.Tasks.Compile.Gleam do
   def run(_args) do
     unless System.find_executable("gleam") do
       Mix.raise("`gleam` was not found on PATH.")
+    end
+
+    unless File.dir?(@core_dir) do
+      Mix.raise("The engine dependency is missing; run `mix deps.get` first.")
     end
 
     case System.cmd("gleam", ["build"], cd: @core_dir, stderr_to_stdout: true) do
@@ -111,12 +117,12 @@ defmodule Mix.Tasks.Compile.Gleam do
   end
 end
 
-defmodule CliChatStandalone.MixProject do
+defmodule AtuinAI.Server.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :cli_chat_standalone,
+      app: :atuin_ai_server,
       version: "0.1.0",
       elixir: "~> 1.18",
       compilers: [:gleam] ++ Mix.compilers(),
@@ -126,11 +132,11 @@ defmodule CliChatStandalone.MixProject do
         # Gleam apps are normalized at compile time
         # (Mix.Tasks.Compile.Gleam.normalize_app_specs!/0) so the `.app`
         # files Mix reads during assembly have `modules` populated.
-        # `cli_chat_core: :load` puts the engine in the boot script's
+        # `atuin_ai_core: :load` puts the engine in the boot script's
         # application list (code-only, no supervision tree); its gleam
         # dependencies ride in transitively via its `.app` requirements.
         atuin_ai_server: [
-          applications: [cli_chat_core: :load],
+          applications: [atuin_ai_core: :load],
           include_executables_for: [:unix]
         ]
       ]
@@ -139,7 +145,7 @@ defmodule CliChatStandalone.MixProject do
 
   def application do
     [
-      mod: {CliChatStandalone.Application, []},
+      mod: {AtuinAI.Server.Application, []},
       # :inets for the httpc-based e2e tests.
       extra_applications: [:logger, :inets]
     ]
@@ -147,6 +153,11 @@ defmodule CliChatStandalone.MixProject do
 
   defp deps do
     [
+      {:atuin_ai_core,
+       git: "https://github.com/atuinsh/atuin-ai-core.git",
+       tag: "v0.1.0",
+       compile: false,
+       app: false},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:toml, "~> 0.7"}

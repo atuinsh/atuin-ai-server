@@ -1,4 +1,4 @@
-defmodule CliChatStandaloneTest do
+defmodule AtuinAI.ServerTest do
   @moduledoc """
   End-to-end over real TCP: a fake OpenAI-compatible upstream streams a
   canned SSE completion, the standalone server is booted from a real TOML
@@ -67,7 +67,7 @@ defmodule CliChatStandaloneTest do
       id: :fake_upstream
     )
 
-    config_path = Path.join(System.tmp_dir!(), "cli_chat_standalone_test_#{server_port}.toml")
+    config_path = Path.join(System.tmp_dir!(), "atuin_ai_server_test_#{server_port}.toml")
 
     File.write!(config_path, """
     port = #{server_port}
@@ -92,9 +92,9 @@ defmodule CliChatStandaloneTest do
 
     on_exit(fn -> File.rm(config_path) end)
 
-    config = CliChatStandalone.Config.load!(config_path)
-    CliChatStandalone.State.put(config, nil)
-    start_supervised!({Bandit, plug: CliChatStandalone.Router, port: server_port}, id: :server)
+    config = AtuinAI.Server.Config.load!(config_path)
+    AtuinAI.Server.State.put(config, nil)
+    start_supervised!({Bandit, plug: AtuinAI.Server.Router, port: server_port}, id: :server)
 
     {:ok, server_port: server_port}
   end

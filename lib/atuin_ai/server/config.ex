@@ -1,4 +1,4 @@
-defmodule CliChatStandalone.Config do
+defmodule AtuinAI.Server.Config do
   @moduledoc """
   Loads and validates the operator config file (TOML) into everything the
   server needs at boot: the model catalog and the per-model LLM options.
@@ -168,7 +168,7 @@ defmodule CliChatStandalone.Config do
   # boot failures.
   defp options_by_model(models, endpoint, api_key, headers, extra_body) do
     Map.new(models, fn model ->
-      case :atuin_hub@cli_chat@llm@openai_endpoint.options(
+      case :atuin_ai_core@llm@openai_endpoint.options(
              endpoint,
              api_key,
              headers,

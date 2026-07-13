@@ -1,17 +1,17 @@
-defmodule CliChatStandalone.State do
+defmodule AtuinAI.Server.State do
   @moduledoc """
   The boot-time state the router reads per request: the composed engine
   `Instance`, the catalog, and the optional bearer token. Persistent-term
   because it's written once at boot and read on every request.
   """
 
-  alias CliChatStandalone.Config
+  alias AtuinAI.Server.Config
 
   @key {__MODULE__, :state}
 
   def put(%Config{} = config, auth_token) do
     :persistent_term.put(@key, %{
-      instance: CliChatStandalone.Instance.build(config),
+      instance: AtuinAI.Server.Instance.build(config),
       catalog: config.catalog,
       auth_token: auth_token
     })

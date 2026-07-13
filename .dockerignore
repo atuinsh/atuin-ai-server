@@ -1,0 +1,7 @@
+_build/
+deps/
+.git/
+config*.toml
+!config.example.toml
+.*_key
+erl_crash.dump

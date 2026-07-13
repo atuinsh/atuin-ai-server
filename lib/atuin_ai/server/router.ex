@@ -1,4 +1,4 @@
-defmodule CliChatStandalone.Router do
+defmodule AtuinAI.Server.Router do
   @moduledoc """
   The two routes of the standard CLI client protocol, served by the shared
   Gleam engine. Paths match the hosted deployment's, so a client pointed
@@ -8,7 +8,7 @@ defmodule CliChatStandalone.Router do
   use Plug.Router
 
   require Logger
-  alias CliChatStandalone.State
+  alias AtuinAI.Server.State
 
   plug(:match)
   plug(:auth)
@@ -28,12 +28,12 @@ defmodule CliChatStandalone.Router do
     env =
       {:request_env, "standalone", current_date(), :metadata_only, true, false}
 
-    conn = :atuin_hub@cli_chat@http@controller.serve(conn, conn.params, instance, env)
+    conn = :atuin_ai_core@http@controller.serve(conn, conn.params, instance, env)
 
     stop = Time.utc_now()
     diff = Time.diff(stop, start, :microsecond)
 
-    Logger.info("Finished request in #{diff / 1000000} seconds")
+    Logger.info("Finished request in #{diff / 1_000_000} seconds")
 
     conn
   end
@@ -42,7 +42,7 @@ defmodule CliChatStandalone.Router do
     Logger.info("Received request: /api/cli/models")
 
     %{catalog: catalog} = State.get()
-    :atuin_hub@cli_chat@http@controller.models_response(conn, catalog, false)
+    :atuin_ai_core@http@controller.models_response(conn, catalog, false)
   end
 
   match _ do

@@ -1,6 +1,4 @@
-# Build from the repository root (the build needs the shared engine):
-#
-#   docker build -f cli_chat_standalone/Dockerfile -t atuin-ai-server .
+# Build:  docker build -t atuin-ai-server .
 #
 # Run with the operator config mounted:
 #
@@ -17,8 +15,9 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
 FROM ${BUILDER_IMAGE} AS builder
 
-# git and CA certs: gleam fetches the engine's dependencies, including a
-# git dependency, during the build.
+# git and CA certs: mix fetches the engine as a git dependency, and
+# gleam fetches the engine's own dependencies (including a git
+# dependency) during the build.
 RUN apt-get update -y && apt-get install -y build-essential git curl ca-certificates \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
@@ -36,17 +35,15 @@ RUN mix local.hex --force && \
 
 ENV MIX_ENV="prod"
 
-WORKDIR /app/cli_chat_standalone
+WORKDIR /app
 
 # Hex deps first, so they cache independently of source changes.
-COPY cli_chat_standalone/mix.exs cli_chat_standalone/mix.lock ./
+COPY mix.exs mix.lock ./
 RUN mix deps.get --only $MIX_ENV
-COPY cli_chat_standalone/config config
+COPY config config
 RUN mix deps.compile
 
-# The shared engine changes more often than the hex deps; copy it late.
-COPY gleam_cli_chat_core /app/gleam_cli_chat_core
-COPY cli_chat_standalone/lib lib
+COPY lib lib
 
 RUN mix compile
 RUN mix release
@@ -67,7 +64,7 @@ WORKDIR /app
 RUN chown nobody /app
 USER nobody
 
-COPY --from=builder --chown=nobody:root /app/cli_chat_standalone/_build/prod/rel/atuin_ai_server ./
+COPY --from=builder --chown=nobody:root /app/_build/prod/rel/atuin_ai_server ./
 
 ENV CHAT_CONFIG="/etc/atuin-ai/config.toml"
 EXPOSE 8080

@@ -19,11 +19,10 @@ docker run \
   atuin-ai-server
 ```
 
-Building the image (from the repository root — the build needs the
-shared engine):
+Building the image:
 
 ```sh
-docker build -f cli_chat_standalone/Dockerfile -t atuin-ai-server .
+docker build -t atuin-ai-server .
 ```
 
 To reach an engine running on the Docker host (e.g. local Ollama), use
@@ -139,3 +138,8 @@ endpoint = "http://localhost:8080"
 - Model failures surface in the stream: a misconfigured model name or
   unreachable endpoint fails the request immediately with the upstream's
   status and error message.
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE). The engine lives in
+[atuin-ai-core](https://github.com/atuinsh/atuin-ai-core).

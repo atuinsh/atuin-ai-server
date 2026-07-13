@@ -1,4 +1,4 @@
-defmodule CliChatStandalone.Instance do
+defmodule AtuinAI.Server.Instance do
   @moduledoc """
   Composes the engine `Instance` for this deployment: the stateless
   builder defaults (no limits, no recording, inline tool results, no
@@ -6,7 +6,7 @@ defmodule CliChatStandalone.Instance do
   configured OpenAI-compatible endpoint.
   """
 
-  alias CliChatStandalone.Config
+  alias AtuinAI.Server.Config
 
   def build(%Config{options_by_model: options_by_model, catalog: catalog}) do
     backend = fn resolved_model, _session_id ->
@@ -16,6 +16,6 @@ defmodule CliChatStandalone.Instance do
       end
     end
 
-    :atuin_hub@cli_chat@instance.new(catalog, backend)
+    :atuin_ai_core@instance.new(catalog, backend)
   end
 end
