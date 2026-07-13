@@ -63,6 +63,10 @@ defmodule CliChatStandalone.Config do
   # config file only names it.
   defp resolve_api_key(nil), do: :none
 
+  defp resolve_api_key(key) when is_binary(key) do
+    {:some, key}
+  end
+
   defp resolve_api_key(%{"env" => var}) do
     case System.get_env(var) do
       nil -> raise "Config names api_key env var #{var}, but it is not set"
@@ -70,8 +74,21 @@ defmodule CliChatStandalone.Config do
     end
   end
 
+  defp resolve_api_key(%{"cmd" => cmd}) do
+    bin = Map.get(cmd, "run", nil)
+    args = Map.get(cmd, "args", [])
+
+    if is_nil(bin) or String.length(bin) == 0 do
+      raise "Config api_key specified `cmd` with no `run` option"
+    end
+
+    case System.cmd(bin, args) do
+      {value, _exit} -> {:some, String.trim(value)}
+    end
+  end
+
   defp resolve_api_key(other) do
-    raise "Config [api_key] must have an `env` key, got: #{inspect(other)}"
+    raise "Config [api_key] must have an `env` or `cmd` key or be a string, got: #{inspect(other)}"
   end
 
   defp parse_headers(nil), do: :none

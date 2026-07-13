@@ -7,6 +7,7 @@ defmodule CliChatStandalone.Router do
 
   use Plug.Router
 
+  require Logger
   alias CliChatStandalone.State
 
   plug(:match)
@@ -15,6 +16,9 @@ defmodule CliChatStandalone.Router do
   plug(:dispatch)
 
   post "/api/cli/chat" do
+    Logger.info("Received request: /api/cli/chat")
+    start = Time.utc_now()
+
     %{instance: instance} = State.get()
 
     # options_enabled: true — the model/run_preference fields are not
@@ -24,15 +28,26 @@ defmodule CliChatStandalone.Router do
     env =
       {:request_env, "standalone", current_date(), :metadata_only, true, false}
 
-    :atuin_hub@cli_chat@http@controller.serve(conn, conn.params, instance, env)
+    conn = :atuin_hub@cli_chat@http@controller.serve(conn, conn.params, instance, env)
+
+    stop = Time.utc_now()
+    diff = Time.diff(stop, start, :microsecond)
+
+    Logger.info("Finished request in #{diff / 1000000} seconds")
+
+    conn
   end
 
   get "/api/cli/models" do
+    Logger.info("Received request: /api/cli/models")
+
     %{catalog: catalog} = State.get()
     :atuin_hub@cli_chat@http@controller.models_response(conn, catalog, false)
   end
 
   match _ do
+    Logger.warning("Unknown route: #{conn.request_path}")
+
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(404, ~s({"error":"not_found","message":"No such route"}))

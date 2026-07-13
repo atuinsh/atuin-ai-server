@@ -2,4 +2,6 @@
 /deps/
 erl_crash.dump
 *.ez
-config.toml
+config*.toml
+!config.example.toml
+.*_key
