@@ -83,7 +83,17 @@ defmodule CliChatStandalone.Config do
     end
 
     case System.cmd(bin, args) do
-      {value, _exit} -> {:some, String.trim(value)}
+      {value, 0} ->
+        key = String.trim(value)
+
+        if key == "" do
+          raise "Config api_key cmd produced an empty value"
+        end
+
+        {:some, key}
+
+      {_value, exit} ->
+        raise "Config api_key cmd failed with exit #{exit}"
     end
   end
 
