@@ -28,7 +28,7 @@ defmodule AtuinAI.Server.Config do
   arguments and turns validation failures into boot errors.
   """
 
-  defstruct [:port, :catalog, :options_by_model, :default_alias]
+  defstruct [:port, :catalog, :options_by_model, :default_alias, :web_tools]
 
   def load!(path) do
     raw =
@@ -48,7 +48,8 @@ defmodule AtuinAI.Server.Config do
       port: raw["port"] || 8080,
       catalog: catalog(models, default_alias),
       options_by_model: options_by_model(models, endpoint, api_key, headers, extra_body),
-      default_alias: default_alias
+      default_alias: default_alias,
+      web_tools: parse_web_tools(raw["web_tools"])
     }
   end
 
@@ -59,30 +60,33 @@ defmodule AtuinAI.Server.Config do
     end
   end
 
-  # [api_key] env = "VAR" — the secret stays in the environment; the
-  # config file only names it.
   defp resolve_api_key(nil), do: :none
+  defp resolve_api_key(value), do: {:some, resolve_secret(value, "api_key")}
 
-  defp resolve_api_key(key) when is_binary(key) do
+  # A secret in any of its three forms: an inline string, `env = "VAR"`
+  # (the secret stays in the environment; the config only names it), or
+  # `cmd = { run = ..., args = [...] }` (the secret comes from a
+  # command's stdout, e.g. a password manager).
+  defp resolve_secret(key, label) when is_binary(key) do
     case String.trim(key) do
-      "" -> raise "Config api_key must not be empty"
-      key -> {:some, key}
+      "" -> raise "Config #{label} must not be empty"
+      key -> key
     end
   end
 
-  defp resolve_api_key(%{"env" => var}) do
+  defp resolve_secret(%{"env" => var}, label) do
     case System.get_env(var) do
-      nil -> raise "Config names api_key env var #{var}, but it is not set"
-      value -> {:some, value}
+      nil -> raise "Config names #{label} env var #{var}, but it is not set"
+      value -> value
     end
   end
 
-  defp resolve_api_key(%{"cmd" => cmd}) do
+  defp resolve_secret(%{"cmd" => cmd}, label) do
     bin = Map.get(cmd, "run", nil)
     args = Map.get(cmd, "args", [])
 
     if is_nil(bin) or String.length(bin) == 0 do
-      raise "Config api_key specified `cmd` with no `run` option"
+      raise "Config #{label} specified `cmd` with no `run` option"
     end
 
     case System.cmd(bin, args) do
@@ -90,18 +94,40 @@ defmodule AtuinAI.Server.Config do
         key = String.trim(value)
 
         if key == "" do
-          raise "Config api_key cmd produced an empty value"
+          raise "Config #{label} cmd produced an empty value"
         end
 
-        {:some, key}
+        key
 
       {_value, exit} ->
-        raise "Config api_key cmd failed with exit #{exit}"
+        raise "Config #{label} cmd failed with exit #{exit}"
     end
   end
 
-  defp resolve_api_key(other) do
-    raise "Config [api_key] must have an `env` or `cmd` key or be a string, got: #{inspect(other)}"
+  defp resolve_secret(other, label) do
+    raise "Config #{label} must have an `env` or `cmd` key or be a string, got: #{inspect(other)}"
+  end
+
+  # [web_tools] — optional; each key enables its tool (Brave-backed
+  # web_search, Firecrawl-backed web_scrape) for every chat turn.
+  defp parse_web_tools(nil), do: nil
+
+  defp parse_web_tools(%{} = raw) do
+    brave = raw["brave_api_key"]
+    firecrawl = raw["firecrawl_api_key"]
+
+    if is_nil(brave) and is_nil(firecrawl) do
+      raise "Config [web_tools] needs brave_api_key and/or firecrawl_api_key"
+    end
+
+    %{
+      brave_api_key: brave && resolve_secret(brave, "web_tools.brave_api_key"),
+      firecrawl_api_key: firecrawl && resolve_secret(firecrawl, "web_tools.firecrawl_api_key")
+    }
+  end
+
+  defp parse_web_tools(other) do
+    raise "Config web_tools must be a table, got: #{inspect(other)}"
   end
 
   defp parse_headers(nil), do: :none

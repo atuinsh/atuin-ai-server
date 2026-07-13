@@ -41,3 +41,12 @@ alias = "llama"
 name = "Llama 3.2"
 description = "Local llama3.2 via Ollama"
 model = "llama3.2"
+
+# Optional server-side web tools, the same providers the hosted service
+# uses. Each configured key enables its tool for every chat turn:
+# brave_api_key enables web_search (Brave Search API), firecrawl_api_key
+# enables web_scrape (Firecrawl). Keys take the same three forms as
+# api_key (inline string, { env = ... }, or { cmd = ... }).
+# [web_tools]
+# brave_api_key = { env = "BRAVE_API_KEY" }
+# firecrawl_api_key = { env = "FIRECRAWL_API_KEY" }

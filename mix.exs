@@ -155,7 +155,7 @@ defmodule AtuinAI.Server.MixProject do
     [
       {:atuin_ai_core,
        git: "https://github.com/atuinsh/atuin-ai-core.git",
-       tag: "v0.1.0",
+       tag: "v0.2.1",
        compile: false,
        app: false},
       {:bandit, "~> 1.5"},

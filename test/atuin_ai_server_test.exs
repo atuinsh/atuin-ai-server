@@ -15,6 +15,11 @@ defmodule AtuinAI.ServerTest do
     plug(Plug.Parsers, parsers: [:json], json_decoder: JSON)
     plug(:dispatch)
 
+    get "/teapot" do
+      conn = fetch_query_params(conn)
+      send_resp(conn, 418, "short and stout q=#{conn.query_params["q"]}")
+    end
+
     post "/v1/chat/completions" do
       # Assertions on the request the adapter built ride through the test
       # process registered under a well-known name.
@@ -96,7 +101,7 @@ defmodule AtuinAI.ServerTest do
     AtuinAI.Server.State.put(config, nil)
     start_supervised!({Bandit, plug: AtuinAI.Server.Router, port: server_port}, id: :server)
 
-    {:ok, server_port: server_port}
+    {:ok, server_port: server_port, upstream_port: upstream_port}
   end
 
   setup do
@@ -211,6 +216,43 @@ defmodule AtuinAI.ServerTest do
     # *valid* turn still comes back. This pins that the request didn't 500.
     assert status == 200 or status == 400
     assert to_string(response) != ""
+  end
+
+  test "the engine's web transport preserves the response status", %{
+    upstream_port: upstream_port
+  } do
+    # Query included: the original dream build_url dropped query strings
+    # on the wire (fixed in 3.0.1-atuin.3).
+    request =
+      {:http_request, :get, "http://localhost:#{upstream_port}/teapot?q=steep", [], "", 5000}
+
+    assert {:ok, {418, "short and stout q=steep"}} =
+             :atuin_ai_core@http@web_transport.send(request)
+  end
+
+  test "web tools register per configured key" do
+    config_path = Path.join(System.tmp_dir!(), "web_tools_test.toml")
+
+    File.write!(config_path, """
+    endpoint = "http://localhost:9/v1"
+
+    [web_tools]
+    brave_api_key = "brave-test-key"
+
+    [[models]]
+    alias = "m"
+    model = "m1"
+    """)
+
+    on_exit(fn -> File.rm(config_path) end)
+
+    instance =
+      config_path
+      |> AtuinAI.Server.Config.load!()
+      |> AtuinAI.Server.Instance.build()
+
+    assert :atuin_ai_core@instance.is_server_tool(instance, "web_search")
+    refute :atuin_ai_core@instance.is_server_tool(instance, "web_scrape")
   end
 
   defp free_port do

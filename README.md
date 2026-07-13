@@ -111,6 +111,22 @@ ships:
 stream_options = { include_usage = true }
 ```
 
+### Web tools
+
+`[web_tools]` enables the server-side web tools — the same providers the
+hosted service uses. Each configured key enables its tool:
+`brave_api_key` enables `web_search` (Brave Search API),
+`firecrawl_api_key` enables `web_scrape` (Firecrawl). Keys take the same
+three forms as `api_key`. Scraping goes through Firecrawl rather than
+fetching model-chosen URLs directly, so requests to arbitrary URLs
+originate from Firecrawl's network, not yours.
+
+```toml
+[web_tools]
+brave_api_key = { env = "BRAVE_API_KEY" }
+firecrawl_api_key = { env = "FIRECRAWL_API_KEY" }
+```
+
 ## Authentication
 
 Set the `AUTH_TOKEN` environment variable to require
