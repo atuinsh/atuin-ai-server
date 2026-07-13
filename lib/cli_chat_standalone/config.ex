@@ -64,7 +64,10 @@ defmodule CliChatStandalone.Config do
   defp resolve_api_key(nil), do: :none
 
   defp resolve_api_key(key) when is_binary(key) do
-    {:some, key}
+    case String.trim(key) do
+      "" -> raise "Config api_key must not be empty"
+      key -> {:some, key}
+    end
   end
 
   defp resolve_api_key(%{"env" => var}) do
