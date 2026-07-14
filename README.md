@@ -16,17 +16,17 @@ cp config.example.toml config.toml   # then edit
 docker run \
   -v ./config.toml:/etc/atuin-ai/config.toml \
   -p 8080:8080 \
-  atuin-ai-server
+  ghcr.io/atuinsh/atuin-ai-server:latest
 ```
 
-Building the image:
+Or build your own image:
 
 ```sh
 docker build -t atuin-ai-server .
 ```
 
 To reach an engine running on the Docker host (e.g. local Ollama), use
-`host.docker.internal` in the endpoint:
+`host.docker.internal` as the server's endpoint:
 
 ```toml
 endpoint = "http://host.docker.internal:11434/v1"
@@ -35,7 +35,7 @@ endpoint = "http://host.docker.internal:11434/v1"
 ## Quick start (from source)
 
 Requires Erlang/OTP, Elixir, and Gleam (versions in the repository's
-`.tool-versions`).
+`.tool-versions` file).
 
 ```sh
 cp config.example.toml config.toml   # then edit
@@ -59,19 +59,19 @@ endpoint = "http://localhost:11434/v1"
 default_model = "llama"   # optional; defaults to the first model
 
 [[models]]
-alias = "llama"                       # what CLI users select
-name = "Llama 3.2"                    # display name in the model list
-description = "Local llama3.2 via Ollama"
-model = "llama3.2:latest"             # sent as the request's `model`
+alias = "llama"                           # what CLI users select
+name = "Llama 3.2"                        # display name in the model list
+description = "Local llama3.2 via Ollama" # extra text in the model list
+model = "llama3.2:latest"                 # sent as the request's `model`
 ```
 
-The model (and serving engine) must support **tool calling** — the chat
+The model (and serving engine) must support **tool calling**; the chat
 protocol drives tools on every turn.
 
 ### API keys
 
-Local engines usually need none — with no `api_key`, no Authorization
-header is sent. Otherwise, three forms:
+Local engines usually need none; with no `api_key`, no Authorization
+header is sent. Otherwise, you can specify a key in three formats:
 
 ```toml
 api_key = "sk-..."                    # inline
@@ -88,7 +88,7 @@ By default the key is sent as `Authorization: Bearer <key>`.
 
 ### Custom headers
 
-`[request.headers]` replaces the default Authorization header entirely —
+`[request.headers]` replaces the default Authorization header entirely;
 spell out every auth header you need. `{{api_key}}` expands wherever it
 appears, so the secret stays in `api_key` while the headers control its
 shape (e.g. Azure-style `api-key` auth):
@@ -113,8 +113,8 @@ stream_options = { include_usage = true }
 
 ### Web tools
 
-`[web_tools]` enables the server-side web tools — the same providers the
-hosted service uses. Each configured key enables its tool:
+`[web_tools]` enables the server-side web tools. These are the same
+providers the hosted service uses. Each configured key enables its tool:
 `brave_api_key` enables `web_search` (Brave Search API),
 `firecrawl_api_key` enables `web_scrape` (Firecrawl). Keys take the same
 three forms as `api_key`. Scraping goes through Firecrawl rather than
@@ -131,7 +131,7 @@ firecrawl_api_key = { env = "FIRECRAWL_API_KEY" }
 
 Set the `AUTH_TOKEN` environment variable to require
 `Authorization: Bearer <token>` on every request. Unset means open
-access — fine on loopback, not anywhere else.
+access. Set `api_token` in Atuin AI's config section to match.
 
 ## Connecting the Atuin CLI
 
@@ -153,7 +153,7 @@ endpoint = "http://localhost:8080"
   OpenAI's newer `/v1/responses` protocol are not supported.
 - Model failures surface in the stream: a misconfigured model name or
   unreachable endpoint fails the request immediately with the upstream's
-  status and error message.
+  status and error message in the Atuin AI TUI.
 
 ## License
 
