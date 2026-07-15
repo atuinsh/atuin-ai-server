@@ -1,5 +1,5 @@
 %{
-  "atuin_ai_core": {:git, "https://github.com/atuinsh/atuin-ai-core.git", "5ff3efa9072288fddbcc36812e0759dedcb68820", [tag: "v0.2.1"]},
+  "atuin_ai_core": {:git, "https://github.com/atuinsh/atuin-ai-core.git", "fa7da61e7fc8cd2c01693c1f12d93538b9a3cee7", [tag: "v0.2.2"]},
   "bandit": {:hex, :bandit, "1.12.0", "6c5214daa2469644ac4ab0113b98abc24f75e348378e6a974c6343b3e5da22ef", [:mix], [{:hpax, "~> 1.0", [hex: :hpax, repo: "hexpm", optional: false]}, {:plug, "~> 1.18", [hex: :plug, repo: "hexpm", optional: false]}, {:telemetry, "~> 0.4 or ~> 1.0", [hex: :telemetry, repo: "hexpm", optional: false]}, {:thousand_island, "~> 1.5", [hex: :thousand_island, repo: "hexpm", optional: false]}, {:websock, "~> 0.5", [hex: :websock, repo: "hexpm", optional: false]}], "hexpm", "45dac82dc86f45cf4a196dee9cc5a8b791d9c9469d996055f055e6ee36c66e20"},
   "hpax": {:hex, :hpax, "1.0.4", "777de5d433b0fbdc7c418159c8055910faa8047ffdb3d6b31098d2a46cd7685c", [:mix], [], "hexpm", "afc7cb142ebcc2d01ce7816190b98ce5dd49e799111b24249f3443d730f377ca"},
   "mime": {:hex, :mime, "2.0.7", "b8d739037be7cd402aee1ba0306edfdef982687ee7e9859bee6198c1e7e2f128", [:mix], [], "hexpm", "6171188e399ee16023ffc5b76ce445eb6d9672e2e241d2df6050f3c771e80ccd"},
