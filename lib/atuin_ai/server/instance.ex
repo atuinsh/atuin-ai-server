@@ -20,6 +20,9 @@ defmodule AtuinAI.Server.Instance do
 
     :atuin_ai_core@instance.new(catalog, backend)
     |> with_web_tools(config.web_tools)
+    # Structured operational logs (TTFT, durations, failures) through
+    # Logger; the engine default observes nothing.
+    |> :atuin_ai_core@instance.with_observer(:atuin_ai_core@observe.logging_observer())
   end
 
   defp with_web_tools(instance, nil), do: instance
