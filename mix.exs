@@ -155,7 +155,7 @@ defmodule AtuinAI.Server.MixProject do
     [
       {:atuin_ai_core,
        git: "https://github.com/atuinsh/atuin-ai-core.git",
-       branch: "mkt/observer-port",
+       tag: "v0.2.5",
        compile: false,
        app: false},
       {:bandit, "~> 1.5"},
