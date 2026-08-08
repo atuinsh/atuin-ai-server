@@ -169,7 +169,7 @@ defmodule AtuinAI.ServerTest do
     assert Plug.Conn.get_req_header(upstream_conn, "authorization") == []
   end
 
-  test "an upstream HTTP error fails the turn fast with the status and body", %{
+  test "an upstream HTTP error fails the turn fast with a generic error event", %{
     server_port: port
   } do
     body =
@@ -193,8 +193,14 @@ defmodule AtuinAI.ServerTest do
     {:ok, {{_, 200, _}, _headers, response}} = Task.await(task, 5000)
     response = to_string(response)
 
-    assert response =~ "HTTP 404"
-    assert response =~ "not found, try pulling it first"
+    assert response =~ "event: error"
+    assert response =~ ~s("code":"upstream_error")
+    assert response =~ "LLM request failed, please retry"
+
+    # Since core v0.2.5 the upstream status and body are operator detail
+    # (logged via the Failed outcome); they must not reach the client.
+    refute response =~ "HTTP 404"
+    refute response =~ "not found, try pulling it first"
   end
 
   test "unknown model alias is a 400", %{server_port: port} do
