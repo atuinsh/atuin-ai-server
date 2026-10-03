@@ -133,6 +133,22 @@ Set the `AUTH_TOKEN` environment variable to require
 `Authorization: Bearer <token>` on every request. Unset means open
 access. Set `api_token` in Atuin AI's config section to match.
 
+## Logging
+
+Set `LOG_FORMAT` to choose the log output format:
+
+- `text` (default): one human-readable line per entry.
+- `json`: one JSON object per line, with `time`, `level`, `message` and
+  `logger`.
+- `ecs`: one [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html)
+  JSON object per line, with `@timestamp`, `log.level`, `message`,
+  `log.logger`, `log.origin.*`, `ecs.version` and `service.name`.
+
+In both JSON formats, the engine's `[scope] event key=value ...` lines are
+also broken out into fields: `scope`/`event`/`fields` for `json`, and
+`event.dataset`/`event.action`/`labels` for `ecs`. Values are kept as
+strings. Any other value fails startup with an error.
+
 ## Connecting the Atuin CLI
 
 ```toml

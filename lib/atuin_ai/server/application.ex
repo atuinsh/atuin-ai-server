@@ -7,6 +7,9 @@ defmodule AtuinAI.Server.Application do
 
   @impl true
   def start(_type, _args) do
+    # First, so config errors below already come out in the chosen format.
+    AtuinAI.Server.LogFormat.configure!(System.get_env("LOG_FORMAT"))
+
     # The engine's apps are code-only (`:load`) in the boot script, so
     # nothing starts them for us. Since 5.1.3, dream_http_client is a
     # real OTP application whose start callback creates the ETS tables
