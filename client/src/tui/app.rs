@@ -261,6 +261,12 @@ impl AiApp {
         !self.tool_interrupts.is_empty()
     }
 
+    /// Whether the FSM still waits on `tool_id`'s result, and so will pass it to the model:
+    /// false once the call was cancelled, as it ignores a result then.
+    fn awaits_result(&self, tool_id: &str) -> bool {
+        self.fsm.ctx.tools.get(tool_id).is_some_and(|tool| !tool.is_resolved())
+    }
+
     /// Whether the visible conversation carries a suggested command.
     fn has_command(&self) -> bool {
         self.visible_events().iter().any(|e| e.as_command().is_some())
@@ -1075,7 +1081,11 @@ impl App for AiApp {
                 outcome,
                 seen,
             } => {
-                if let (Some((path, state)), Some(io)) = (seen, &mut self.io) {
+                // A read cancelled while it ran never reaches the model, so the model hasn't
+                // seen the file: recording it would let an edit skip the read it needs.
+                if self.awaits_result(&tool_id)
+                    && let (Some((path, state)), Some(io)) = (seen, &mut self.io)
+                {
                     io.file_tracker.record(path, state);
                 }
                 let preview = None;
@@ -1909,6 +1919,7 @@ mod tests {
         });
         drop(h.rt.take_effects());
         h.press(KeyCode::Enter); // Allow
+        assert!(h.app().awaits_result("tool-r"));
         h.run_spawned();
 
         let app = h.app();
@@ -1920,6 +1931,28 @@ mod tests {
             )),
             "read result should carry the file content"
         );
+    }
+
+    #[rstest]
+    fn a_read_cancelled_while_it_runs_is_no_longer_awaited() {
+        let mut h =
+            Harness::new(app_with(AgentFsm::new(vec!["client_v1_read_file".into()], "t".into())));
+        h.type_str("read it");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamToolCall {
+            id: "tool-r".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({ "file_path": "/nonexistent/file" }),
+        });
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+        h.press(KeyCode::Enter); // Allow: the read is running
+        assert!(h.app().awaits_result("tool-r"));
+
+        h.press(KeyCode::Esc);
+        assert!(!h.app().awaits_result("tool-r"));
     }
 
     #[rstest]

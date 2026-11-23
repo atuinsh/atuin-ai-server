@@ -38,23 +38,32 @@ fn absolute_path(path: &Path) -> PathBuf {
 }
 
 /// The file a tool's `path` names: absolute, with `.`, `..` and symlinks resolved, so a write goes
-/// through a symlink rather than replacing it. A path that doesn't exist yet keeps its missing tail
-/// under its deepest existing ancestor, resolved.
+/// through a symlink rather than replacing it.
+///
+/// A path that doesn't exist yet is resolved a component at a time, in order, as the kernel would
+/// resolve it once its missing directories exist: a `..` after a symlink steps out of its target,
+/// not out of the directory holding the link.
 fn resolve_tool_path(path: &Path) -> PathBuf {
     let absolute =
         std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path));
     if let Ok(real) = std::fs::canonicalize(&absolute) {
         return real;
     }
-    let lexical = absolute_path(path);
-    lexical
-        .ancestors()
-        .skip(1)
-        .find_map(|ancestor| {
-            let real = std::fs::canonicalize(ancestor).ok()?;
-            Some(real.join(lexical.strip_prefix(ancestor).ok()?))
-        })
-        .unwrap_or(lexical)
+    absolute.components().fold(PathBuf::new(), |mut resolved, component| {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            other => {
+                resolved.push(other);
+                if let Ok(real) = std::fs::canonicalize(&resolved) {
+                    resolved = real;
+                }
+            }
+        }
+        resolved
+    })
 }
 
 /// Whether a rule's `scope` glob matches the file `path` names, spelled either as written or
@@ -1385,6 +1394,19 @@ mod tests {
 
         let new_file = write_tool(&root.join("sub/./new/../new.txt").to_string_lossy());
         assert_eq!(new_file.resolved_path(), root.join("sub/new.txt"));
+    }
+
+    /// `link/../new.txt` is beside the link's target, as the kernel resolves it, not beside the
+    /// link.
+    #[cfg(unix)]
+    #[rstest]
+    fn a_new_file_after_a_symlinked_dir_lands_beside_its_target() {
+        let (_dir, root) = project_with_secret();
+        std::fs::create_dir_all(root.join("data/sub")).unwrap();
+        std::os::unix::fs::symlink(root.join("data/sub"), root.join("sub/link")).unwrap();
+
+        let call = write_tool(&root.join("sub/link/../new.txt").to_string_lossy());
+        assert_eq!(call.resolved_path(), root.join("data/new.txt"));
     }
 
     #[rstest]
