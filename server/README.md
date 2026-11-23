@@ -13,7 +13,7 @@ Commands below run from this `server/` directory.
 ```sh
 # Copy the server config file into your local config file.
 # Please see the comment lines in the example file for more details.
-cp server/config.example.toml config.toml
+cp config.example.toml config.toml
 
 # Run the server in your docker container.
 docker run \
