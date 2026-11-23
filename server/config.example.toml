@@ -1,0 +1,49 @@
+# The port the service is started on.
+port = 8080
+
+# OpenAI-compatible chat completions endpoint.
+endpoint = "http://localhost:11434/v1"
+# The default model used, via the `alias` key in the models section.
+default_model = "llama"
+
+## Configure the API key for the model provider (optional).
+## You can pass the key as a static string
+#api_key = "<your-anthropic-api-key>"
+## You can pass the API key through an environment variable
+#api_key = { env = "ANTHROPIC_API_KEY" }
+## Or you can pass a command that gets invoked to fetch the API key.
+#api_key = { run = "cmd", args = ["read", "op://vault/item/key"] }
+
+## Customize the request headers
+#[request.headers]
+## This is a special-case header which overrides the Authorization header.
+## Substituted as `Authorization: Bearer <api-key>`. You can reference, in the
+## string, the string `{{api_key}}` which will be replaced with the loaded
+## api_key.
+#api-key = "{{api_key}}"
+
+# Optional extra chat-completions body fields for engines that take them.
+[request.body]
+# Most engines (Ollama, vLLM, ...) require that you explicitly request usage
+# in the body.
+stream_options = { include_usage = true }
+
+# Which models you support
+[[models]]
+alias = "llama"
+name = "Llama 3.2"
+description = "Local llama3.2 via Ollama"
+model = "llama3.2"
+
+## You can add additional models by tacking them on in the config file.
+#[[models]]
+#alias = "claude-opus-5.5"
+#name = "Claude Opus 5.5"
+#description = "Claude Opus 5.5 (remote)"
+
+## Optional server-side web tools.
+# [web_tools]
+## https://brave.com/search/api/ API key (optional, enables web_search)
+# brave_api_key = { env = "BRAVE_API_KEY" }
+## https://www.firecrawl.dev/ API key (optional, enables web_scrape)
+# firecrawl_api_key = { env = "FIRECRAWL_API_KEY" }

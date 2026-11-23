@@ -1,161 +1,46 @@
-# Atuin AI Server
+# Atuin AI
 
-A minimal self-hosted server for the Atuin AI protocol, backed by any
-OpenAI-compatible chat-completions endpoint — Ollama, vLLM, LM Studio,
-llama.cpp, LiteLLM, OpenRouter, or a compatible cloud API. It runs the
-same engine the hosted Atuin AI service serves, composed with stateless
-defaults: no accounts, no database, no usage limits, no recording.
+Atuin AI is a self-hosted terminal-first AI agent.
 
-The Atuin CLI talks to it unchanged: point `ai.endpoint` at this server
-and chat runs against your own models.
+> [!NOTE]
+>
+> Atuin AI is entering low-maintenance mode. Security concerns addressed, however, Atuin Inc. no
+> longer provides an official, managed server.
 
-## Quick start (Docker)
+## Quick Start
 
-```sh
-cp config.example.toml config.toml   # then edit
+To get started with Atuin AI, you need to host an instance of the server, as described in the
+[following section](#self-hosting).
+
+Then, install Atuin AI by running:
+
+```bash
+cargo TODO
+```
+
+### Self-Hosting
+
+Atuin no longer provides a managed installation of Atuin AI. **You must host your own instance.**
+The easiest way to host this Atuin AI is via our docker image:
+
+```bash
+# Copy the server config file into your local config file.
+# Please see the comment lines in the example file for more details.
+cp server/config.example.toml config.toml
+
+# Run the server in your docker container.
 docker run \
   -v ./config.toml:/etc/atuin-ai/config.toml \
   -p 8080:8080 \
   ghcr.io/atuinsh/atuin-ai-server:latest
 ```
 
-Or build your own image:
+#### Authentication
 
-```sh
-docker build -t atuin-ai-server .
-```
-
-To reach an engine running on the Docker host (e.g. local Ollama), use
-`host.docker.internal` as the server's endpoint:
-
-```toml
-endpoint = "http://host.docker.internal:11434/v1"
-```
-
-## Quick start (from source)
-
-Requires Erlang/OTP, Elixir, and Gleam (versions in the repository's
-`.tool-versions` file).
-
-```sh
-cp config.example.toml config.toml   # then edit
-mix deps.get
-mix run --no-halt
-```
-
-## Configuration
-
-One TOML file, path given by `CHAT_CONFIG` (default `./config.toml`; the
-Docker image defaults to `/etc/atuin-ai/config.toml`).
-
-```toml
-port = 8080
-
-# The OpenAI-compatible chat-completions endpoint. Accepted with or
-# without the trailing /chat/completions; a query string is passed
-# through to every request.
-endpoint = "http://localhost:11434/v1"
-
-default_model = "llama"   # optional; defaults to the first model
-
-[[models]]
-alias = "llama"                           # what CLI users select
-name = "Llama 3.2"                        # display name in the model list
-description = "Local llama3.2 via Ollama" # extra text in the model list
-model = "llama3.2:latest"                 # sent as the request's `model`
-```
-
-The model (and serving engine) must support **tool calling**; the chat
-protocol drives tools on every turn.
-
-### API keys
-
-Local engines usually need none; with no `api_key`, no Authorization
-header is sent. Otherwise, you can specify a key in three formats:
-
-```toml
-api_key = "sk-..."                    # inline
-
-[api_key]
-env = "CHAT_API_KEY"                  # from the environment
-
-[api_key]
-cmd = { run = "op", args = ["read", "op://vault/item/key"] }
-                                      # from a command's stdout
-```
-
-By default the key is sent as `Authorization: Bearer <key>`.
-
-### Custom headers
-
-`[request.headers]` replaces the default Authorization header entirely;
-spell out every auth header you need. `{{api_key}}` expands wherever it
-appears, so the secret stays in `api_key` while the headers control its
-shape (e.g. Azure-style `api-key` auth):
-
-```toml
-[request.headers]
-api-key = "{{api_key}}"
-```
-
-### Extra body fields
-
-`[request.body]` merges extra fields into every chat-completions request,
-for engine-specific options. `stream`, `model`, `messages`, and `tools`
-are owned by the server and rejected here. Most engines only report
-token usage on streamed responses when asked, so the example config
-ships:
-
-```toml
-[request.body]
-stream_options = { include_usage = true }
-```
-
-### Web tools
-
-`[web_tools]` enables the server-side web tools. These are the same
-providers the hosted service uses. Each configured key enables its tool:
-`brave_api_key` enables `web_search` (Brave Search API),
-`firecrawl_api_key` enables `web_scrape` (Firecrawl). Keys take the same
-three forms as `api_key`. Scraping goes through Firecrawl rather than
-fetching model-chosen URLs directly, so requests to arbitrary URLs
-originate from Firecrawl's network, not yours.
-
-```toml
-[web_tools]
-brave_api_key = { env = "BRAVE_API_KEY" }
-firecrawl_api_key = { env = "FIRECRAWL_API_KEY" }
-```
-
-## Authentication
-
-Set the `AUTH_TOKEN` environment variable to require
-`Authorization: Bearer <token>` on every request. Unset means open
-access. Set `api_token` in Atuin AI's config section to match.
-
-## Connecting the Atuin CLI
-
-```toml
-# ~/.config/atuin/config.toml
-[ai]
-endpoint = "http://localhost:8080"
-# api_token = "..."   # must match AUTH_TOKEN when set
-```
-
-## Routes
-
-- `POST /api/cli/chat` — the streaming chat endpoint
-- `GET /api/cli/models` — the configured model list
-
-## Limitations
-
-- Chat-completions APIs only. Models that are exclusively served via
-  OpenAI's newer `/v1/responses` protocol are not supported.
-- Model failures surface in the stream: a misconfigured model name or
-  unreachable endpoint fails the request immediately with the upstream's
-  status and error message in the Atuin AI TUI.
+Set the `AUTH_TOKEN` environment variable to require `Authorization: Bearer <token>` on every
+request. Unset means open access. Set the client's `ai.api_token` to match.
 
 ## License
 
-Apache-2.0; see [LICENSE](LICENSE). The engine lives in
-[atuin-ai-core](https://github.com/atuinsh/atuin-ai-core).
+The server is Apache-2.0; see [LICENSE](LICENSE). The client is MIT, as the Atuin code it comes
+from; see [client/LICENSE](client/LICENSE).

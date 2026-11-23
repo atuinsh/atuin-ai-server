@@ -3,6 +3,8 @@ name: docker
 on:
   push:
     branches: [main]
+    # Path filters only gate branch pushes; a tag push always builds.
+    paths: ["server/**", ".github/workflows/docker.yml"]
     tags: ["v*"]
 
 env:
@@ -41,7 +43,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: server
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=${{ env.PLATFORM_PAIR }},mode=max

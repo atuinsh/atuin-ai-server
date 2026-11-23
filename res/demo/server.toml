@@ -1,0 +1,8 @@
+port = 8080
+endpoint = "http://host.docker.internal:18081/v1"
+
+[[models]]
+alias = "demo"
+name = "Demo"
+description = "The scripted model in model.py"
+model = "demo"

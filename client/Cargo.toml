@@ -1,0 +1,203 @@
+[package]
+name = "atuin-ai"
+version = "0.1.0"
+edition = "2024"
+description = "The Atuin AI shell agent: press ? at an empty prompt to chat with an Atuin AI server"
+license = "MIT"
+repository = "https://github.com/atuinsh/atuin-ai-server"
+rust-version = "1.95.0"
+publish = false
+
+[features]
+default = []
+# Parses shell commands with tree-sitter for permission checks, instead of the built-in splitter.
+tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
+
+[dependencies]
+# The vt100 fork atuin publishes, for its scrollback capture; upstream vt100 has none.
+atuin-vt100 = "0.19"
+async-stream = "0.3"
+async-trait = "0.1"
+chrono = "0.4"
+chrono-humanize = "0.2"
+clap = { version = "4", features = ["derive", "env"] }
+const_format = "0.2"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+crossterm = { version = "0.29", features = ["use-dev-tty", "event-stream"] }
+derive_more = { version = "2", features = ["display", "from"] }
+dirs = "6"
+# easy-cast 0.5.5+ raises its MSRV to 1.96.
+#
+# The assert_nonzero feature patches a bug fixed in:
+# https://github.com/kas-gui/easy-cast/pull/52
+# which was released in 0.6.0
+easy-cast = { version = "0.5", features = ["assert_nonzero"] }
+enum_dispatch = "0.3"
+eventsource-stream = "0.2"
+eye_declare = "0.7"
+eyre = "0.6"
+fs-err = "3"
+futures = "0.3"
+glob-match = "0.2"
+humantime = "2"
+imara-diff = "0.2"
+memchr = "2"
+minspan = "0.1"
+pulldown-cmark = "0.13"
+ratatui-core = "0.1"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+shellexpand = "3"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+tempfile = "3"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+tokio = { version = "1", features = ["full"] }
+toml = "1"
+toml_edit = "0.25"
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["ansi", "fmt", "registry", "env-filter"] }
+tree-sitter = { version = "0.27", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-fish = { version = "3", optional = true }
+tui-textarea-2 = "0.13"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1.6", features = ["v7"] }
+whoami = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+yaml-rust2 = "0.11"
+
+strum = { version = "0.27", features = ["strum_macros"] }
+strum_macros = "0.28"
+
+[dev-dependencies]
+eye_declare_engine = { version = "0.7", features = ["test-util"] }
+proptest = "1"
+rstest = "0.27"
+
+[profile.dev.package]
+libsqlite3-sys.opt-level = 3
+
+[lints.clippy]
+as_ptr_cast_mut = "warn"
+assigning_clones = "warn"
+borrow_as_ptr = "warn"
+branches_sharing_code = "warn"
+case_sensitive_file_extension_comparisons = "warn"
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+# TODO(markovejnovic): This could be enabled in a separate PR.
+#cast_precision_loss = "warn"
+clear_with_drain = "warn"
+cloned_instead_of_copied = "warn"
+collapsible_else_if = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+derive_partial_eq_without_eq = "warn"
+elidable_lifetime_names = "warn"
+empty_line_after_outer_attr = "warn"
+explicit_deref_methods = "warn"
+explicit_into_iter_loop = "warn"
+explicit_iter_loop = "warn"
+fallible_impl_from = "warn"
+filter_map_next = "warn"
+flat_map_option = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+fn_params_excessive_bools = "warn"
+fn_to_numeric_cast_any = "warn"
+if_not_else = "warn"
+implicit_clone = "warn"
+# Going through `Display` is slower than shadowing `to_string`, as it avoids
+# dynamic dispatch.
+inherent_to_string_shadow_display = "allow"
+index_refutable_slice = "warn"
+iter_not_returning_iterator = "warn"
+iter_on_single_items = "warn"
+iter_with_drain = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+lossy_float_literal = "warn"
+manual_assert = "warn"
+manual_ilog2 = "warn"
+manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"
+maybe_infinite_iter = "warn"
+mem_forget = "warn"
+mismatching_type_param_order = "warn"
+multiple_unsafe_ops_per_block = "warn"
+must_use_candidate = "warn"
+mut_mut = "warn"
+needless_collect = "warn"
+needless_continue = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_pass_by_value = "warn"
+needless_raw_string_hashes = "warn"
+no_effect_underscore_binding = "warn"
+non_std_lazy_statics = "warn"
+nonminimal_bool = "warn"
+option_as_ref_cloned = "warn"
+path_buf_push_overwrite = "warn"
+ptr_as_ptr = "warn"
+range_minus_one = "warn"
+range_plus_one = "warn"
+rc_mutex = "warn"
+read_zero_byte_vec = "warn"
+redundant_clone = "warn"
+redundant_pub_crate = "warn"
+ref_option = "warn"
+ref_option_ref = "warn"
+return_self_not_must_use = "warn"
+same_functions_in_if_condition = "warn"
+same_name_method = "warn"
+search_is_some = "warn"
+semicolon_if_nothing_returned = "warn"
+set_contains_or_insert = "warn"
+significant_drop_in_scrutinee = "warn"
+significant_drop_tightening = "warn"
+single_char_pattern = "warn"
+single_option_map = "warn"
+stable_sort_primitive = "warn"
+str_split_at_newline = "warn"
+string_lit_as_bytes = "warn"
+suspicious_operation_groupings = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+trivial_regex = "warn"
+trivially_copy_pass_by_ref = "warn"
+tuple_array_conversions = "warn"
+type_repetition_in_bounds = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+uninlined_format_args = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_join = "warn"
+unnecessary_literal_bound = "warn"
+unnecessary_struct_initialization = "warn"
+unnecessary_trailing_comma = "warn"
+unnecessary_wraps = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
+unused_async = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+unused_self = "warn"
+use_self = "warn"
+used_underscore_binding = "warn"
+used_underscore_items = "warn"
+useless_let_if_seq = "warn"
+verbose_bit_mask = "warn"
+while_float = "warn"
+wildcard_imports = "warn"
