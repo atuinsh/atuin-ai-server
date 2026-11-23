@@ -110,4 +110,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+    # Every interface: the server container reaches it through host.docker.internal, which is
+    # the Docker bridge on Linux, not loopback.
+    ThreadingHTTPServer(("0.0.0.0", int(sys.argv[1])), Handler).serve_forever()
