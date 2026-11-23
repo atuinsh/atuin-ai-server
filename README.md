@@ -4,18 +4,42 @@ Atuin AI is a self-hosted terminal-first AI agent.
 
 > [!NOTE]
 >
-> Atuin AI is entering low-maintenance mode. Security concerns addressed, however, Atuin Inc. no
-> longer provides an official, managed server.
+> Atuin AI is in low-maintenance mode. Security concerns addressed, however, Atuin Inc. no longer
+> provides an official, managed server.
+
+![Atuin AI suggesting a command, then rebuilding a Docker image from shell history](res/demo.gif)
 
 ## Quick Start
 
 To get started with Atuin AI, you need to host an instance of the server, as described in the
 [following section](#self-hosting).
 
-Then, install Atuin AI by running:
+First, ensure that `atuin` itself is installed. Then, install Atuin AI by running:
 
 ```bash
-cargo TODO
+cargo install --locked --git https://github.com/atuinsh/atuin-ai atuin-ai
+```
+
+Once installed, configure your shell hooks:
+
+```bash
+# ~/.zshrc
+eval "$(atuin init zsh)" # <- you will already have this
+eval "$(atuin-ai init zsh)"
+
+# ~/.bashrc
+eval "$(atuin init bash)" # <- you will already have this
+eval "$(atuin-ai init bash)"
+
+# ~/.config/fish/config.fish
+atuin init fish | source # <- you will already have this
+atuin-ai init fish | source
+```
+
+Finally, configure your `atuin-ai` to point at your self-hosted instance. In `~/.atuin/ai.toml`:
+
+```toml
+endpoint = "<your-url>"
 ```
 
 ### Self-Hosting
@@ -38,7 +62,7 @@ docker run \
 #### Authentication
 
 Set the `AUTH_TOKEN` environment variable to require `Authorization: Bearer <token>` on every
-request. Unset means open access. Set the client's `ai.api_token` to match.
+request. Unset means open access. Set `api_token` in the client's `ai.toml` to match.
 
 ## License
 
