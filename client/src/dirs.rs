@@ -1,6 +1,6 @@
 //! Where Atuin keeps its files.
 //!
-//! The agent shares Atuin's config and data directories: its settings are the `[ai]` table of
+//! The agent shares Atuin's config and data directories: its settings are `ai.toml` beside
 //! Atuin's `config.toml`, and it reads Atuin's history database. These rules mirror
 //! `atuin_common::dirs` in atuinsh/atuin, minus the `themes` special cases; when Atuin changes
 //! where it looks, this module has to follow.
@@ -48,12 +48,13 @@ pub fn atuin_home_is_set() -> bool {
     var_abspath("ATUIN_HOME").is_some()
 }
 
-/// Top-level config items affected by the `ATUIN_CONFIG_DIR` environment variable.
-const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
+/// Top-level config items affected by the `ATUIN_CONFIG_DIR` environment variable: Atuin's are
+/// `config.toml` and `server.toml`, and `ai.toml` sits beside them.
+const ATUIN_CONFIG_DIR_ITEMS: [&str; 1] = ["ai.toml"];
 
-/// Get the path of a config item, such as `config.toml` or `skills`.
+/// Get the path of a config item, such as `ai.toml` or `skills`.
 ///
-/// `$ATUIN_CONFIG_DIR` wins for `config.toml`, then `$ATUIN_HOME`, then whichever of `~/.atuin`
+/// `$ATUIN_CONFIG_DIR` wins for `ai.toml`, then `$ATUIN_HOME`, then whichever of `~/.atuin`
 /// and the legacy `$XDG_CONFIG_HOME/atuin` already holds the item, then `~/.atuin`.
 ///
 /// # Panics
@@ -93,8 +94,8 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         return legacy.join(child);
     }
 
-    // A `config.toml` in `~/.config/atuin` keeps winning even when `XDG_CONFIG_HOME` points
-    // elsewhere, so Atuin doesn't create a `~/.atuin` one that would shadow it.
+    // An `ai.toml` in `~/.config/atuin` keeps winning even when `XDG_CONFIG_HOME` points
+    // elsewhere, so `/model` doesn't create a `~/.atuin` one that would shadow it.
     if ATUIN_CONFIG_DIR_ITEMS.iter().any(|name| *name == top)
         && legacy_config_dir_with(XdgDir::Default).is_ok_and(|dir| dir.join(top).exists())
     {
@@ -143,7 +144,7 @@ fn legacy_config_dir_with(xdg: XdgDir) -> Result<PathBuf, HomeError> {
     Ok(path.join("atuin"))
 }
 
-/// The data directory used when `data_dir` isn't set in `config.toml`.
+/// Atuin's data directory, unless its `config.toml` sets `data_dir`.
 ///
 /// This is `$ATUIN_HOME/data`, falling back to [`legacy_data_dir`] when `ATUIN_HOME` is unset,
 /// `~/.atuin/data` doesn't exist, and a legacy data dir does.

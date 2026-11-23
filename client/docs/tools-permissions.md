@@ -1,7 +1,7 @@
 # Tools and permissions
 
 The agent has tools it can use on your system, with your permission, to answer questions and act
-on your behalf. Which ones the model is offered is set by [capabilities](settings.md#capabilities).
+on your behalf. Which ones the model is offered is set by [capabilities](../ai.example.toml).
 
 ## Permissions
 
@@ -72,7 +72,7 @@ case: a term with an uppercase letter matches case-sensitively.
 
 **Rule:** `AtuinHistory`
 
-**Capability:** `ai.capabilities.enable_history_search`
+**Capability:** `capabilities.enable_history_search`
 
 ```toml
 [permissions]
@@ -87,7 +87,7 @@ question a file answers best.
 **Rule:** `Read(<glob>)`, for example `Read(**/*.md)` for every Markdown file under the current
 directory. `Read` alone matches every file.
 
-**Capability:** `ai.capabilities.enable_file_tools`, which covers `Read` and `Write`.
+**Capability:** `capabilities.enable_file_tools`, which covers `Read` and `Write`.
 
 ```toml
 [permissions]
@@ -108,7 +108,7 @@ configuration or to fix a problem you're debugging.
 
 **Rule:** `Write(<glob>)`, for example `Write(**/*.md)`. `Write` alone matches every file.
 
-**Capability:** `ai.capabilities.enable_file_tools`, which covers `Read` and `Write`.
+**Capability:** `capabilities.enable_file_tools`, which covers `Read` and `Write`.
 
 ```toml
 [permissions]
@@ -129,7 +129,7 @@ when you ask for help debugging one, or during a multi-step task.
 **Rule:** `Shell(<pattern>)`, for example `Shell(git *)` for any command starting with `git`.
 `Shell` alone matches every command.
 
-**Capability:** `ai.capabilities.enable_command_execution`
+**Capability:** `capabilities.enable_command_execution`
 
 ```toml
 [permissions]

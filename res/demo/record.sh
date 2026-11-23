@@ -58,8 +58,7 @@ ATUIN_HOME=$DEMO/atuin HISTFILE=$DEMO/zsh_history atuin import zsh >/dev/null
 sqlite3 "$DEMO/atuin/data/history.db" \
     "update history set cwd = '$project', hostname = 'laptop:dev', author = 'dev'"
 
-cat > "$DEMO/atuin/config.toml" <<EOF
-[ai]
+cat > "$DEMO/atuin/ai.toml" <<EOF
 endpoint = "http://127.0.0.1:$server_port"
 session_continue_minutes = 0
 tips = false

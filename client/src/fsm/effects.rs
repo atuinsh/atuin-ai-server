@@ -68,7 +68,7 @@ pub enum Effect {
     CacheSessionGrant {
         path: PathBuf,
     },
-    /// Persist the selected model alias to `ai.model` in config.toml.
+    /// Persist the selected model alias to `model` in ai.toml.
     SaveModelSelection {
         alias: String,
     },

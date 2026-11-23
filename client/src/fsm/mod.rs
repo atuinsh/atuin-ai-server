@@ -144,7 +144,7 @@ pub struct AgentContext {
     /// Unique invocation ID for this CLI invocation.
     pub invocation_id: String,
     /// Model alias sent with chat requests. `None` = server default.
-    /// Seeded from `ai.model` at startup; updated by the /model picker.
+    /// Seeded from `model` in ai.toml at startup; updated by the /model picker.
     pub model: Option<String>,
     /// Model list fetched this invocation. Later /model calls reuse it
     /// instead of re-hitting the server.

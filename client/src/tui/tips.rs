@@ -9,7 +9,7 @@ use crate::settings::Settings;
 /// pull so predicates see current session state, not startup state.
 pub struct TipContext<'a> {
     pub settings: &'a Settings,
-    /// A model is pinned — via `ai.model` or /model this session.
+    /// A model is pinned, by `model` in ai.toml or /model this session.
     pub model_set: bool,
 }
 
@@ -52,7 +52,7 @@ pub const TIPS: &[Tip] = &[
     Tip {
         id: "send-cwd",
         text: "You can include your working directory in AI requests automatically: set `send_cwd \
-               = true` under `[ai.opening]` in config.toml",
+               = true` under `[opening]` in ai.toml",
         relevant: Some(|ctx| {
             let ai = &ctx.settings.ai;
             !ai.opening.send_cwd.or(ai.send_cwd).unwrap_or(false)
@@ -66,7 +66,7 @@ pub const TIPS: &[Tip] = &[
     Tip {
         id: "send-last-command",
         text: "Send your last command to Atuin AI automatically: set `send_last_command = true` \
-               under `[ai.opening]` in config.toml",
+               under `[opening]` in ai.toml",
         relevant: Some(|ctx| !ctx.settings.ai.opening.send_last_command.unwrap_or(false)),
     },
     Tip {

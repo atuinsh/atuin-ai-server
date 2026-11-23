@@ -1,6 +1,15 @@
-//! Path comparisons.
+//! Path comparisons and display.
 
 use std::path::Path;
+
+/// `path` for display, with `~` for the home directory it is in.
+#[must_use]
+pub fn display_from_home(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(relative) => Path::new("~").join(relative).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
 
 /// Whether `a` and `b` resolve to the same path, symlinks and all.
 ///
@@ -30,6 +39,23 @@ mod tests {
         std::fs::create_dir(&target).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_same(&link, &target));
+    }
+
+    #[rstest]
+    #[case::in_home("/home/me/.atuin/ai.toml", Some("/home/me"), "~/.atuin/ai.toml")]
+    #[case::elsewhere("/etc/atuin/ai.toml", Some("/home/me"), "/etc/atuin/ai.toml")]
+    #[case::sibling_with_a_shared_prefix(
+        "/home/meg/ai.toml",
+        Some("/home/me"),
+        "/home/meg/ai.toml"
+    )]
+    #[case::no_home("/home/me/ai.toml", None, "/home/me/ai.toml")]
+    fn display_from_home_abbreviates(
+        #[case] path: &str,
+        #[case] home: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(display_from_home(Path::new(path), home.map(Path::new)), expected);
     }
 
     #[rstest]

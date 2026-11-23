@@ -4,6 +4,7 @@
 //! Aliases are what we send on the wire; names and descriptions are for
 //! display in the `/model` picker.
 
+use std::path::Path;
 use std::time::Duration;
 
 use eyre::{Context, Result};
@@ -50,19 +51,62 @@ pub async fn fetch_models(
     response.json::<ModelList>().await.context("failed to parse model list")
 }
 
-/// Persist the chosen alias to `ai.model` in config.toml so it becomes the
-/// default for future sessions. Already-running sessions keep the model they
-/// read at startup.
+/// Persist the chosen alias to `model` in ai.toml so it becomes the default
+/// for future sessions. Already-running sessions keep the model they read at
+/// startup.
 pub async fn save_model_selection(alias: &str) -> Result<()> {
-    let config_file = crate::settings::config_file();
-    let config_str = tokio::fs::read_to_string(&config_file).await.unwrap_or_default();
-    let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
+    save_model_to(&crate::settings::config_file(), alias).await
+}
 
-    if !doc.contains_key("ai") {
-        doc["ai"] = toml_edit::table();
+/// Set `model` in the TOML file at `path`, keeping the rest of it, comments
+/// included. A missing file is created.
+async fn save_model_to(path: &Path, alias: &str) -> Result<()> {
+    let existing = match tokio::fs::read_to_string(path).await {
+        Ok(existing) => existing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err).with_context(|| format!("failed to read {}", path.display())),
+    };
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    doc["model"] = toml_edit::value(alias);
+
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
     }
-    doc["ai"]["model"] = toml_edit::value(alias);
+    tokio::fs::write(path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to write {}", path.display()))
+}
 
-    tokio::fs::write(&config_file, doc.to_string()).await?;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::new_file(None)]
+    #[case::replaces_the_old_choice(Some("model = \"old\"\n"))]
+    #[case::keeps_the_rest(Some(
+        "# my server\nendpoint = \"http://localhost:8080\"\n\n[opening]\nsend_cwd = true\n"
+    ))]
+    #[tokio::test]
+    async fn saves_the_model_at_the_top_level(#[case] existing: Option<&str>) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("ai.toml");
+        if let Some(existing) = existing {
+            std::fs::write(&path, existing).expect("the file is written");
+        }
+
+        save_model_to(&path, "llama").await.expect("the model is saved");
+
+        let saved = std::fs::read_to_string(&path).expect("the file is read");
+        let doc: toml::Table = saved.parse().expect("the result parses");
+        assert_eq!(doc["model"].as_str(), Some("llama"), "{saved}");
+        let unchanged = existing.unwrap_or_default().lines().filter(|line| !line.contains("model"));
+        for line in unchanged {
+            assert!(saved.contains(line), "lost {line:?}:\n{saved}");
+        }
+    }
 }

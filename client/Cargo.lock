@@ -167,7 +167,6 @@ dependencies = [
  "config",
  "const_format",
  "crossterm",
- "derive_more",
  "dirs",
  "easy-cast",
  "enum_dispatch",
@@ -714,7 +713,6 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.119",
- "unicode-xid",
 ]
 
 [[package]]

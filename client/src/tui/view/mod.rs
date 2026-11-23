@@ -777,12 +777,7 @@ fn format_path_for_display(path: &std::path::Path) -> String {
     {
         return relative.display().to_string();
     }
-    if let Some(home) = dirs::home_dir()
-        && let Ok(relative) = path.strip_prefix(&home)
-    {
-        return std::path::Path::new("~").join(relative).display().to_string();
-    }
-    path.display().to_string()
+    crate::path::display_from_home(path, dirs::home_dir().as_deref())
 }
 
 #[cfg(test)]

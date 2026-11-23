@@ -171,10 +171,10 @@ pub fn create_chat_stream(
         if status == reqwest::StatusCode::UNAUTHORIZED {
             if token.is_none() {
                 tracing::error!("SSE request failed with status: {status}");
-                yield Err(eyre::eyre!("The endpoint requires authentication. Set ai.api_token in your config."));
+                yield Err(eyre::eyre!("The endpoint requires authentication. Set api_token in ai.toml."));
             } else {
                 tracing::error!("SSE request failed with status: {status}");
-                yield Err(eyre::eyre!("The endpoint rejected the API token. Check ai.api_token in your config."));
+                yield Err(eyre::eyre!("The endpoint rejected the API token. Check api_token in ai.toml."));
             }
             return;
         }

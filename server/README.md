@@ -3,8 +3,8 @@
 A minimal self-hosted server for the Atuin AI protocol, backed by any
 OpenAI-compatible chat-completions endpoint.
 
-The [client](../client) talks to it: point `ai.endpoint` at this server
-and chat runs against your own models.
+The [client](../client) talks to it: set `endpoint` in the client's
+`ai.toml` to this server, and chat runs against your own models.
 
 Commands below run from this `server/` directory.
 

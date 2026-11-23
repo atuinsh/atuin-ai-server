@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use eyre::{Context as _, Result, eyre};
-use secrecy::{ExposeSecret as _, SecretString};
+use secrecy::ExposeSecret as _;
 use tracing::{debug, warn};
 
+use crate::commands::InlineArgs;
 use crate::context::{AppContext, ClientContext};
 use crate::dirs;
 use crate::fsm::AgentFsm;
@@ -14,26 +16,21 @@ use crate::settings::{self, Settings};
 use crate::tui::app::{AiApp, ExitOutcome, IoContext};
 use crate::tui::state::ConversationEvent;
 
-pub async fn run(
-    initial_command: Option<String>,
-    api_endpoint: Option<String>,
-    api_token: Option<SecretString>,
-    settings: Settings,
-    output_for_hook: bool,
-) -> Result<()> {
-    if settings.ai.enabled == Some(false) {
-        emit_shell_result(ExitOutcome::Cancel, output_for_hook);
-        return Ok(());
-    }
+/// How long to wait on a locked SQLite database: Atuin's default `local_timeout`.
+const DB_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub async fn run(args: InlineArgs, settings: Settings) -> Result<()> {
+    let InlineArgs {
+        api_endpoint,
+        api_token,
+        prompt: initial_command,
+        hook: output_for_hook,
+        ..
+    } = args;
     let endpoint = match api_endpoint.as_deref() {
         Some(raw) => reqwest::Url::parse(raw).context("invalid --api-endpoint URL")?,
         None => settings.ai.endpoint.clone().ok_or_else(|| {
-            eyre!(
-                "no Atuin AI server is configured: set `endpoint` in the `[ai]` table of {}, \
-                 e.g. `endpoint = \"http://localhost:8080\"`",
-                settings::config_file().display()
-            )
+            no_endpoint(&settings::config_file(), dirs::try_home_dir().ok().as_deref())
         })?,
     };
     // An empty token means unauthenticated.
@@ -41,9 +38,9 @@ pub async fn run(
         .or_else(|| settings.ai.api_token.clone())
         .filter(|t| !t.expose_secret().is_empty());
 
-    let history_db = open_history(&settings.db_path, &settings).await;
+    let history_db = open_history(&settings.history_db_path).await;
 
-    // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
+    // Support both the deprecated top-level send_cwd and [opening] send_cwd
     let send_cwd =
         settings.ai.opening.send_cwd.unwrap_or(false) || settings.ai.send_cwd.unwrap_or(false);
 
@@ -73,10 +70,21 @@ pub async fn run(
     Ok(())
 }
 
+/// The error for a missing `endpoint`. Usually `ai.toml` doesn't exist yet: on a fresh install, or
+/// for a user whose settings are still in the `[ai]` table of Atuin's `config.toml`.
+fn no_endpoint(file: &Path, home: Option<&Path>) -> eyre::Report {
+    let shown = crate::path::display_from_home(file, home);
+    if file.exists() {
+        eyre!("{shown} sets no `endpoint`; add one, e.g. `endpoint = \"http://localhost:8080\"`")
+    } else {
+        eyre!("could not find {shown}. Coming from Atuin's config.toml? Move its [ai] table there.")
+    }
+}
+
 /// Atuin's history database, or `None` when it can't be opened: the chat still works, without
 /// the `atuin_history` tool or the last command as context.
-async fn open_history(path: &Path, settings: &Settings) -> Option<Arc<HistoryDb>> {
-    match HistoryDb::open(path, settings.local_timeout).await {
+async fn open_history(path: &Path) -> Option<Arc<HistoryDb>> {
+    match HistoryDb::open(path, DB_TIMEOUT).await {
         Ok(db) => Some(Arc::new(db)),
         Err(err) => {
             warn!(?err, path = %path.display(), "failed to open Atuin's history; history search disabled");
@@ -88,7 +96,7 @@ async fn open_history(path: &Path, settings: &Settings) -> Option<Arc<HistoryDb>
 /// The directory where AI snapshots are stored.
 ///
 /// Older versions of Atuin stored snapshots in the [legacy data dir] even when [`data_dir`] was set
-/// in config.toml. If the new snapshot dir doesn't exist, this function will check the legacy path
+/// in its config.toml. If the new snapshot dir doesn't exist, this function will check the legacy path
 /// and return it if it exists, unless `ATUIN_HOME` is set.
 ///
 /// [legacy data dir]: dirs::legacy_data_dir
@@ -117,7 +125,7 @@ async fn run_inline_tui(
     let client_ctx = ClientContext::detect();
 
     // Open the session service and check for a resumable session
-    let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
+    let service = LocalSessionService::open(&settings.ai.db_path, DB_TIMEOUT)
         .await
         .context("failed to open AI session database")?;
 
@@ -190,7 +198,7 @@ async fn run_inline_tui(
         (mgr, fsm, Default::default(), Default::default())
     };
 
-    // `ai.model` is read once at startup, so /model in another running
+    // `model` is read once at startup, so /model in another running
     // session doesn't retarget this one mid-conversation.
     fsm.ctx.model =
         settings.ai.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
@@ -276,5 +284,30 @@ fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
             }
             ExitOutcome::Cancel => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::no_file(
+        false,
+        "could not find ~/ai.toml. Coming from Atuin's config.toml? Move its [ai] table there."
+    )]
+    #[case::no_key(
+        true,
+        "~/ai.toml sets no `endpoint`; add one, e.g. `endpoint = \"http://localhost:8080\"`"
+    )]
+    fn no_endpoint_says_whether_ai_toml_exists(#[case] exists: bool, #[case] expected: &str) {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let file = home.path().join("ai.toml");
+        if exists {
+            std::fs::write(&file, "").expect("the file is written");
+        }
+        assert_eq!(no_endpoint(&file, Some(home.path())).to_string(), expected);
     }
 }

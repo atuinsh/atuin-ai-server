@@ -24,7 +24,6 @@ clap = { version = "4", features = ["derive", "env"] }
 const_format = "0.2"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 crossterm = { version = "0.29", features = ["use-dev-tty", "event-stream"] }
-derive_more = { version = "2", features = ["display", "from"] }
 dirs = "6"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #

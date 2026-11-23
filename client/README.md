@@ -18,11 +18,10 @@ cargo install --locked --path client
 ## Set up
 
 1. Run a server: see [`../server`](../server).
-2. Point the client at it in Atuin's `config.toml`, the same file Atuin reads (`~/.atuin/` or
-   `~/.config/atuin/`):
+2. Point the client at it in `~/.atuin/ai.toml`. [`ai.example.toml`](ai.example.toml) has every
+   setting:
 
    ```toml
-   [ai]
    endpoint = "http://localhost:8080"
    # api_token = "..."   # when the server sets AUTH_TOKEN
    ```
@@ -48,23 +47,27 @@ the prompt for editing. `atuin-ai inline "question"` starts a chat without the w
 
 ## Coming from Atuin's built-in agent
 
-The `[ai]` settings, conversations (`ai_sessions.db`), permission files and skills are the same
-ones, read from the same places, so nothing needs moving. What changed:
+Conversations (`ai_sessions.db`), permission files and skills are the same ones, read from the
+same places. What changed:
 
-- **No Atuin Hub.** There's no login and no credit meter. `ai.endpoint` is required, `ai.api_token`
-  is the only authentication, and `ai.endpoint_protocol` is ignored.
+- **Settings live in `ai.toml`.** Move the keys of the `[ai]` table in Atuin's `config.toml` to
+  `~/.atuin/ai.toml`, without the `[ai]` header: `[ai.opening]` becomes `[opening]`, and
+  `[ai.capabilities]` becomes `[capabilities]`. If `config.toml` moves the history database with
+  `data_dir` or `db_path`, set `history_db_path` in `ai.toml` too. See
+  [`ai.example.toml`](ai.example.toml).
+- **No Atuin Hub.** There's no login and no credit meter. `endpoint` is required, `api_token` is
+  the only authentication, and `endpoint_protocol` is ignored.
 - **No `atuin_output` tool.** Reading captured command output needs Atuin's daemon, which the
-  client doesn't link against, so `ai.capabilities.enable_history_output` is ignored.
+  client doesn't link against, so `capabilities.enable_history_output` is ignored.
 - **Simpler history search.** `atuin_history` matches each term as a substring, then fuzzily, with
   Atuin's smart case. Atuin's search operators (`^`, `'`, `!`, `r/.../`) aren't supported.
-- **No first-run prompt.** Evaluating `atuin-ai init` is the opt-in. `ai.enabled = false` still
-  turns the agent off.
-- **Its own log file**, `atuin-ai.log` in Atuin's logs directory. `[logs.ai]` stays Atuin's, for
-  Threads.
+- **No first-run prompt.** Evaluating `atuin-ai init` is the opt-in, so `enabled` is ignored.
+- **Its own log file**, `atuin-ai.log` in Atuin's logs directory, kept for 4 days. `[logs]` is
+  ignored; `ATUIN_LOG` sets the level, e.g. `ATUIN_LOG=debug`.
 
 ## Docs
 
-- [Settings](docs/settings.md)
+- [Settings](ai.example.toml)
 - [Tools and permissions](docs/tools-permissions.md)
 - [Skills](docs/skills.md)
 - [Slash commands](docs/slash-commands.md)

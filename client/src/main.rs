@@ -8,8 +8,8 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer as _};
 
-use crate::commands::{Cli, Command};
-use crate::settings::{Logs, Settings};
+use crate::commands::{Cli, Command, InlineArgs};
+use crate::settings::Settings;
 
 mod ansi;
 mod commands;
@@ -50,13 +50,20 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    match Cli::parse().command {
+        // `init` runs at every shell startup, so it reads no settings and logs nothing: a broken
+        // ai.toml is reported when `?` is pressed, not by every new shell.
+        Command::Init { shell } => {
+            println!("{}", shell::init(shell));
+            Ok(())
+        }
+        Command::Inline(args) => inline(args),
+    }
+}
+
+fn inline(args: InlineArgs) -> Result<()> {
+    let _log_guard = init_logging(args.verbose);
     let settings = Settings::load()?;
-    // `init` runs at every shell startup, and has nothing worth a log file.
-    let _log_guard = match &cli.command {
-        Command::Inline { verbose, .. } => init_logging(&settings.logs, *verbose),
-        Command::Init { .. } => None,
-    };
 
     // The resume lookup, persistence and tool workers run alongside the TUI.
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -65,34 +72,33 @@ fn run() -> Result<()> {
         .context("failed to start the async runtime")?;
     // `block_on` rather than `spawn`: eye_declare holds a `StdoutLock` across await points, so
     // the TUI's future is not `Send`.
-    runtime.block_on(commands::run(cli.command, settings))
+    runtime.block_on(commands::inline::run(args, settings))
 }
 
-/// Log to the configured file, and to stderr when `stderr` is set. `ATUIN_LOG` overrides the
-/// configured level with an `EnvFilter` directive, as it does for Atuin.
+/// The log file in Atuin's logs directory, rotated daily. Not Atuin's `ai.log`: pruning old logs
+/// goes by file name, and would delete Atuin's.
+const LOG_FILE: &str = "atuin-ai.log";
+/// How many daily log files to keep.
+const LOG_RETENTION_DAYS: usize = 4;
+
+/// Log at `info` to [`LOG_FILE`], and to stderr when `stderr` is set. `ATUIN_LOG` overrides the
+/// level with an `EnvFilter` directive, as it does for Atuin.
 ///
 /// A log file that can't be opened turns file logging off rather than failing the command: the
 /// shell widget would otherwise eat the user's prompt for a sidecar.
-fn init_logging(logs: &Logs, stderr: bool) -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = || {
-        EnvFilter::try_from_env("ATUIN_LOG")
-            .unwrap_or_else(|_| EnvFilter::new(logs.level.to_string()))
-    };
+fn init_logging(stderr: bool) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let filter = || EnvFilter::try_from_env("ATUIN_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let (file_layer, guard) = match logs.file.as_deref().map(|path| rolling_file(path, logs)) {
-        Some(Ok(appender)) => {
+    let (file_layer, guard, file_error) = match rolling_file(&dirs::logs_dir()) {
+        Ok(appender) => {
             let (writer, guard) = tracing_appender::non_blocking(appender);
             let layer = tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(writer)
                 .with_filter(filter());
-            (Some(layer), Some(guard))
+            (Some(layer), Some(guard), None)
         }
-        Some(Err(err)) => {
-            eprintln!("atuin-ai: {err:#}; file logging disabled");
-            (None, None)
-        }
-        None => (None, None),
+        Err(err) => (None, None, Some(err)),
     };
 
     let stderr_layer = stderr.then(|| {
@@ -100,24 +106,23 @@ fn init_logging(logs: &Logs, stderr: bool) -> Option<tracing_appender::non_block
     });
 
     tracing_subscriber::registry().with(file_layer).with(stderr_layer).init();
+    // Logged rather than printed: the shell widget reads the agent's answer from stderr.
+    if let Some(err) = file_error {
+        tracing::warn!(?err, "failed to open the log file; file logging disabled");
+    }
     guard
 }
 
-fn rolling_file(
-    path: &std::path::Path,
-    logs: &Logs,
-) -> Result<tracing_appender::rolling::RollingFileAppender> {
-    let dir = path.parent().unwrap_or(std::path::Path::new("."));
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("atuin-ai.log");
+fn rolling_file(dir: &std::path::Path) -> Result<tracing_appender::rolling::RollingFileAppender> {
     // Pruning old logs reads the directory, and fails loudly when it doesn't exist yet.
     fs_err::create_dir_all(dir)?;
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix(name)
-        .max_log_files(logs.retention_days.max(1))
+        .filename_prefix(LOG_FILE)
+        .max_log_files(LOG_RETENTION_DAYS)
         .build(dir)
-        .with_context(|| format!("failed to open the log file {}", path.display()))?;
-    restrict_log_files(dir, name);
+        .with_context(|| format!("failed to open {LOG_FILE} in {}", dir.display()))?;
+    restrict_log_files(dir, LOG_FILE);
     Ok(appender)
 }
 

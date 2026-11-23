@@ -29,7 +29,7 @@ pub struct AppContext {
 }
 
 /// The `client_v1_*` capability strings this client sends with every AI
-/// request to the server (`ai.endpoint`), which runs the model and sends back
+/// request to the server (`endpoint`), which runs the model and sends back
 /// tool calls. The server reads the list to decide which tools it may ask this
 /// client to run: a tool whose capability string is missing here is never
 /// offered to the model. Requests are built in more than one place, but they
