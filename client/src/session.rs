@@ -279,12 +279,14 @@ impl SessionManager {
 
     /// Archive the current session and reset to a fresh one.
     /// The new session row is deferred until the first event is persisted.
-    pub async fn archive_and_reset(&mut self) -> Result<()> {
+    /// Archive this session and continue as `session_id`, which the app chose so its per-session
+    /// state can move along with it.
+    pub async fn archive_and_reset(&mut self, session_id: String) -> Result<()> {
         if self.persisted_to_db {
             self.service.archive(&self.session_id).await?;
         }
 
-        self.session_id = uuid::Uuid::now_v7().to_string();
+        self.session_id = session_id;
         self.invocation_id = uuid::Uuid::now_v7().to_string();
         self.persisted_count = 0;
         self.head_id = None;

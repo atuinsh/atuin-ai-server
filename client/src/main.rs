@@ -28,6 +28,7 @@ mod history_format;
 mod models;
 mod path;
 mod permissions;
+mod process;
 mod session;
 mod settings;
 mod shell;

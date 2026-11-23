@@ -210,7 +210,9 @@ fn tool_summary_view(summary: &ToolSummary) -> AnyElement<'static> {
 
 fn tool_call_view(details: &ToolCallDetails) -> AnyElement<'static> {
     match &details.render_data {
-        ToolRenderData::Shell { command, preview } => shell_tool_view(command, preview.as_ref()),
+        ToolRenderData::Shell { command, preview } => {
+            shell_tool_view(command, &details.status, preview.as_ref())
+        }
         ToolRenderData::FileEdit { path, preview } => {
             file_edit_tool_view(&details.status, path, preview.as_ref())
         }
@@ -229,11 +231,16 @@ fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static
     match status {
         ToolResultStatus::Pending => tool_spinner(format!("Running: {name}"), false).any(),
         ToolResultStatus::Success => tool_spinner(format!("Ran: {name}"), true).any(),
-        ToolResultStatus::Error { content } => text("✗ ")
-            .style(Style::default().fg(Color::Red))
-            .span(format!("{name}: {}", error_label(content)), Style::default().fg(Color::Red))
-            .any(),
+        ToolResultStatus::Error { content } => tool_error_view(name, content),
     }
+}
+
+/// A failed tool call: `subject`, then whether it was denied, cancelled or failed.
+fn tool_error_view(subject: &str, content: &str) -> AnyElement<'static> {
+    text("✗ ")
+        .style(Style::default().fg(Color::Red))
+        .span(format!("{subject}: {}", error_label(content)), Style::default().fg(Color::Red))
+        .any()
 }
 
 /// Label for a failed tool call, derived from the result content. The FSM's
@@ -252,32 +259,43 @@ fn error_label(content: &str) -> &'static str {
 // ───────────────────────────────────────────────────────────────────
 
 /// Shell command execution with live output viewport.
-fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'static> {
-    let done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted.is_some());
+fn shell_tool_view(
+    command: &str,
+    status: &ToolResultStatus,
+    preview: Option<&ToolPreview>,
+) -> AnyElement<'static> {
+    let Some(preview) = preview else {
+        // No output: not started yet, or it never ran.
+        return match status {
+            ToolResultStatus::Pending => command_spinner("Running: ", command, false).any(),
+            ToolResultStatus::Success => command_spinner("Ran: ", command, true).any(),
+            ToolResultStatus::Error { content } => tool_error_view(command, content),
+        };
+    };
+    let done = !matches!(status, ToolResultStatus::Pending)
+        || preview.exit_code.is_some()
+        || preview.interrupted.is_some();
 
-    match preview {
-        Some(preview) => col()
-            .child(command_spinner(
-                if done {
-                    "Ran: "
-                } else {
-                    "Running: "
-                },
-                command,
-                done,
-            ))
-            .child(
-                row().fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray))).fill(
-                    viewport(preview.lines.iter().cloned())
-                        .height(preview.lines.len().clamp(1, MAX_SHELL_PREVIEW_LINES.into()).cast())
-                        .style(Style::default().fg(Color::Gray))
-                        .wrap(false),
-                ),
-            )
-            .child(shell_tool_footer(preview, done))
-            .any(),
-        None => command_spinner("Running: ", command, false).any(),
-    }
+    col()
+        .child(command_spinner(
+            if done {
+                "Ran: "
+            } else {
+                "Running: "
+            },
+            command,
+            done,
+        ))
+        .child(
+            row().fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray))).fill(
+                viewport(preview.lines.iter().cloned())
+                    .height(preview.lines.len().clamp(1, MAX_SHELL_PREVIEW_LINES.into()).cast())
+                    .style(Style::default().fg(Color::Gray))
+                    .wrap(false),
+            ),
+        )
+        .child(shell_tool_footer(preview, done))
+        .any()
 }
 
 fn shell_tool_footer(preview: &ToolPreview, done: bool) -> AnyElement<'static> {
@@ -708,7 +726,10 @@ pub fn permission_prompt_view(
         ClientToolCall::Write(tool) => wrapped(tool.path.display().to_string()),
         ClientToolCall::Shell(tool) => wrapped(tool.command.clone()),
         ClientToolCall::AtuinHistory(tool) => wrapped(tool.query.clone()),
-        ClientToolCall::LoadSkill(tool) => wrapped(format!("skill: {}", tool.name)),
+        // Only a skill that embeds commands asks first.
+        ClientToolCall::LoadSkill(tool) => {
+            wrapped(format!("{}, which runs the shell commands in it", tool.name))
+        }
     };
     let options = permission_options(&tool_call.tool, project_scope);
 

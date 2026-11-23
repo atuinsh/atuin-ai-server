@@ -209,12 +209,32 @@ impl AiSessionStore {
     }
 
     /// Load all events for a session, ordered chronologically.
+    /// The session's conversation: the chain of parents back from its head, oldest first.
+    ///
+    /// Two terminals that continue one session each append their own branch from the event they
+    /// resumed at, so the session's events can form a tree. The head is the event written last,
+    /// and only its branch is the conversation; a session without one uses its newest event.
     pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
         let events = sqlx::query_as::<_, StoredEvent>(
-            "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
-                 FROM session_events
-                 WHERE session_id = ?1
-                 ORDER BY created_at ASC, rowid ASC",
+            "WITH RECURSIVE branch(id, parent_id, depth) AS (
+                 SELECT id, parent_id, 0
+                     FROM session_events
+                     WHERE session_id = ?1
+                         AND id = COALESCE(
+                             (SELECT head_id FROM sessions WHERE id = ?1),
+                             (SELECT id FROM session_events WHERE session_id = ?1
+                                 ORDER BY created_at DESC, rowid DESC LIMIT 1))
+                 UNION ALL
+                 SELECT e.id, e.parent_id, branch.depth + 1
+                     FROM session_events e
+                     JOIN branch ON e.id = branch.parent_id
+                     WHERE e.session_id = ?1
+             )
+             SELECT e.id, e.session_id, e.parent_id, e.invocation_id, e.event_type,
+                    e.event_data, e.created_at
+                 FROM session_events e
+                 JOIN branch ON e.id = branch.id
+                 ORDER BY branch.depth DESC",
         )
         .bind(session_id)
         .fetch_all(&self.pool)
@@ -361,6 +381,29 @@ mod tests {
             store.find_resumable_session(None, Some("/missing"), hour()).await.unwrap().is_none()
         );
         assert!(store.get_session("selected").await.unwrap().is_some());
+    }
+
+    /// Two terminals continue a session from `e2`, each appending its own branch: loading it gives
+    /// the branch written last, never a mix of both.
+    #[rstest]
+    #[case::a_last(&[("b3", "e2"), ("a3", "e2"), ("a4", "a3")], &["e1", "e2", "a3", "a4"])]
+    #[case::b_last(&[("a3", "e2"), ("b3", "e2"), ("a4", "a3"), ("b4", "b3")], &["e1", "e2", "b3", "b4"])]
+    #[tokio::test]
+    async fn concurrent_branches_load_apart(
+        #[future] store_with_s1: AiSessionStore,
+        #[case] appends: &[(&str, &str)],
+        #[case] expected: &[&str],
+    ) {
+        let store = store_with_s1.await;
+        store.append_event("s1", "e1", None, "inv1", "user_message", "{}").await.unwrap();
+        store.append_event("s1", "e2", Some("e1"), "inv1", "text", "{}").await.unwrap();
+        for (id, parent) in appends {
+            store.append_event("s1", id, Some(parent), "inv2", "text", "{}").await.unwrap();
+        }
+
+        let events = store.load_events("s1").await.unwrap();
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, expected);
     }
 
     #[rstest]

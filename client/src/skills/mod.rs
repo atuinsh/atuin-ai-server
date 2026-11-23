@@ -170,6 +170,17 @@ impl SkillRegistry {
     /// `$ARGUMENTS` in the body is replaced with the provided arguments before
     /// shell interpolation runs. If `$ARGUMENTS` does not appear in the body
     /// and arguments were provided, they are appended as `ARGUMENTS: <value>`.
+    /// Whether loading the skill `name` runs commands embedded in it. An unknown or unreadable
+    /// skill runs none: loading it fails.
+    pub async fn runs_commands(&self, name: &str) -> bool {
+        let Some(skill) = self.get(name) else {
+            return false;
+        };
+        tokio::fs::read_to_string(&skill.source_path)
+            .await
+            .is_ok_and(|content| interpolate::has_commands(&frontmatter::parse(&content).body))
+    }
+
     pub async fn load(&self, name: &str, shell: &str, arguments: Option<&str>) -> Result<String> {
         let skill = self.get(name).ok_or_else(|| eyre!("Unknown skill: {name}"))?;
 
@@ -253,6 +264,29 @@ mod tests {
             source_path: format!("{name}/SKILL.md").into(),
             disable_model_invocation: disabled,
         }
+    }
+
+    #[rstest]
+    #[case::text_only("Deploy with `make deploy`.", false)]
+    #[case::inline_command("Branch: !`git branch --show-current`", true)]
+    #[case::block_command("Status:\n\n```!\ngit status\n```\n", true)]
+    #[tokio::test]
+    async fn a_skill_runs_commands_only_when_it_embeds_them(
+        #[case] body: &str,
+        #[case] expected: bool,
+    ) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let source_path = dir.path().join("SKILL.md");
+        std::fs::write(&source_path, format!("---\nname: deploy\n---\n{body}"))
+            .expect("the skill is written");
+        let registry = SkillRegistry {
+            skills: vec![SkillDescriptor {
+                source_path,
+                ..descriptor("deploy", "Deploy", false)
+            }],
+        };
+        assert_eq!(registry.runs_commands("deploy").await, expected);
+        assert!(!registry.runs_commands("missing").await);
     }
 
     #[rstest]

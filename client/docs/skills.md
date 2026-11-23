@@ -73,7 +73,9 @@ Skills support shell substitution:
 - **Inline:** `!`command``, replaced with the command's `stdout`
 - **Block:** a ` ```! ` code block, replaced as a whole with the script's `stdout`
 
-Commands run at skill load time (when invoked), not at discovery time.
+Commands run at skill load time (when invoked), not at discovery time. When the LLM loads a skill
+that has commands, the agent asks first, as for any tool: the `LoadSkill` permission rule allows it
+without asking. Skills you invoke yourself, and skills without commands, load without asking.
 
 ## Arguments
 

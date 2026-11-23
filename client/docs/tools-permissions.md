@@ -163,3 +163,19 @@ alike.
 > subcommands, and runs without asking only when every subcommand is allowed: here, by both
 > `Shell(git add *)` and `Shell(npm test)`. The splitting isn't perfect, and some shells parse
 > worse than others, so be careful allowing broad patterns.
+>
+> Commands nested in others, as in `$(..)`, are checked too. A command the parser can't read all
+> the way through, such as one with a syntax error, asks unless `Shell` alone allows everything.
+
+### Load skill
+
+`load_skill` loads one of your [skills](skills.md) when the model finds it relevant. A skill that
+embeds commands runs them as it loads, so loading it asks first; any other skill loads without
+asking.
+
+**Rule:** `LoadSkill`
+
+```toml
+[permissions]
+allow = ["LoadSkill"]
+```

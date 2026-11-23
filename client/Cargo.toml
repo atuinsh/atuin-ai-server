@@ -9,8 +9,9 @@ rust-version = "1.95.0"
 publish = false
 
 [features]
-default = []
-# Parses shell commands with tree-sitter for permission checks, instead of the built-in splitter.
+default = ["tree-sitter"]
+# Parses shell commands with tree-sitter for permission checks. Without it, the built-in splitter
+# checks them, and asks about any command it can't see all the way into.
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
@@ -74,6 +75,10 @@ yaml-rust2 = "0.11"
 
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
+
+[target.'cfg(unix)'.dependencies]
+# Stops a command's whole process group.
+rustix = { version = "1.1", features = ["process"] }
 
 [dev-dependencies]
 eye_declare_engine = { version = "0.7", features = ["test-util"] }

@@ -21,8 +21,10 @@ pub enum PersistJob {
         file_tracker: Option<String>,
         edit_permissions: Option<String>,
     },
-    /// `/new`: archive the current session and start fresh.
-    Archive,
+    /// `/new`: archive the current session and continue as `session_id`.
+    Archive {
+        session_id: String,
+    },
 }
 
 /// Spawn the worker on the ambient tokio runtime. Dropping the returned
@@ -65,8 +67,8 @@ pub fn spawn_persist_worker(
                         tracing::warn!("failed to persist edit permissions: {e}");
                     }
                 }
-                PersistJob::Archive => {
-                    if let Err(e) = session_mgr.archive_and_reset().await {
+                PersistJob::Archive { session_id } => {
+                    if let Err(e) = session_mgr.archive_and_reset(session_id).await {
                         tracing::warn!("failed to archive session: {e}");
                     }
                 }

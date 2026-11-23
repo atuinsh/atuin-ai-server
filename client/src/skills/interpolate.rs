@@ -83,6 +83,11 @@ fn parse_commands(source: &str) -> Vec<Command> {
     commands
 }
 
+/// Whether `source` embeds any commands to run.
+pub(super) fn has_commands(source: &str) -> bool {
+    !parse_commands(source).is_empty()
+}
+
 /// Execute all commands in a skill file and return the interpolated content.
 ///
 /// Commands are executed in parallel. Failed commands are replaced with an
@@ -98,7 +103,8 @@ pub async fn interpolate(source: &str, shell: &str) -> String {
     for cmd in &commands {
         let shell = shell.to_string();
         let body = cmd.body.clone();
-        handles.push(tokio::spawn(async move { run_command(&shell, &body).await }));
+        handles
+            .push(tokio::spawn(async move { run_command(&shell, &body, COMMAND_TIMEOUT).await }));
     }
 
     // Collect results.
@@ -132,12 +138,28 @@ pub async fn interpolate(source: &str, shell: &str) -> String {
     out
 }
 
-async fn run_command(shell: &str, body: &str) -> String {
-    let result = tokio::time::timeout(
-        COMMAND_TIMEOUT,
-        tokio::process::Command::new(shell).arg("-c").arg(body).output(),
-    )
-    .await;
+async fn run_command(shell: &str, body: &str, timeout: Duration) -> String {
+    let mut cmd = tokio::process::Command::new(shell);
+    cmd.arg("-c")
+        .arg(body)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    crate::process::own_group(&mut cmd);
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return format!("[error: {e}]"),
+    };
+    let pid = child.id();
+
+    let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
+    if result.is_err()
+        && let Some(pid) = pid
+    {
+        // Dropping the wait killed the shell; this stops what it started.
+        crate::process::kill_group(pid);
+    }
 
     match result {
         Ok(Ok(output)) => {
@@ -159,7 +181,9 @@ async fn run_command(shell: &str, body: &str) -> String {
             }
         }
         Ok(Err(e)) => format!("[error: {e}]"),
-        Err(_) => format!("[error: command timed out after {}s]", COMMAND_TIMEOUT.as_secs()),
+        Err(_) => {
+            format!("[error: command timed out after {}]", humantime::format_duration(timeout))
+        }
     }
 }
 
@@ -168,6 +192,42 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// Wait for `path` to exist: a command writes it once it has started what the test stops.
+    #[cfg(unix)]
+    async fn wait_for_file(path: &std::path::Path) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the command starts");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_timed_out_command_stops_everything_it_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let body = format!("sleep 30 & echo $! > {}; wait", pid_file.display());
+
+        let output = run_command("sh", &body, Duration::from_millis(500)).await;
+        assert!(output.contains("timed out"), "{output}");
+
+        wait_for_file(&pid_file).await;
+        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let pid = rustix::process::Pid::from_raw(pid).unwrap();
+        // Killed, then reaped by init once orphaned: poll until it is gone.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rustix::process::test_kill_process(pid).is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the background job was killed");
+    }
 
     #[rstest]
     fn parse_inline_command() {

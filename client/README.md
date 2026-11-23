@@ -47,8 +47,10 @@ the prompt for editing. `atuin-ai inline "question"` starts a chat without the w
 
 ## Coming from Atuin's built-in agent
 
-Conversations (`ai_sessions.db`), permission files and skills are the same ones, read from the
-same places. What changed:
+Permission files and skills are the same ones, read from the same places. So are conversations,
+in `ai_sessions.db` in Atuin's data directory, unless Atuin's `config.toml` moved them with
+`data_dir` or `[ai].db_path`: then move `ai_sessions.db`, and the `ai/snapshots/` backups beside it,
+to `~/.atuin/data/`. What changed:
 
 - **Settings live in `ai.toml`.** Move the keys of the `[ai]` table in Atuin's `config.toml` to
   `~/.atuin/ai.toml`, without the `[ai]` header: `[ai.opening]` becomes `[opening]`, and

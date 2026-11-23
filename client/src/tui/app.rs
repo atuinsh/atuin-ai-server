@@ -55,6 +55,22 @@ pub struct IoContext {
     pub skill_registry: crate::skills::SkillRegistry,
 }
 
+impl IoContext {
+    /// Continue as a new session: nothing read, granted or backed up in the old one carries
+    /// over, and backups go to the new session's directory.
+    fn start_session(&mut self, session_id: String) {
+        self.file_tracker = Default::default();
+        self.edit_permissions = Default::default();
+        self.snapshot_store = self.snapshot_store.as_ref().and_then(|store| {
+            store
+                .for_session(&session_id)
+                .inspect_err(|err| tracing::warn!(?err, "failed to open the new session's backups"))
+                .ok()
+        });
+        let _ = self.persist.send(PersistJob::Archive { session_id });
+    }
+}
+
 /// The policy vocabulary. Mode-dependent resolution happens in `keymap()`
 /// (rebuilt from the model every update), so each variant means exactly one
 /// thing by the time it reaches `update`.
@@ -90,6 +106,13 @@ pub enum Msg {
     ConfirmModel,
     /// An FSM event from spawned work (stream frames, timeouts).
     Fsm(Event),
+    /// A `read_file` finished: what it returned, and what it saw of the file, for checking
+    /// later changes against.
+    FileRead {
+        tool_id: String,
+        outcome: crate::tools::ToolOutcome,
+        seen: Option<(PathBuf, crate::file_tracker::FileReadState)>,
+    },
 }
 
 /// Where `/help` sends the user.
@@ -361,8 +384,8 @@ impl AiApp {
                 Effect::ArchiveSession => {
                     self.responded = None;
                     self.turn_tip = None;
-                    if let Some(io) = &self.io {
-                        let _ = io.persist.send(PersistJob::Archive);
+                    if let Some(io) = &mut self.io {
+                        io.start_session(uuid::Uuid::now_v7().to_string());
                     }
                 }
                 Effect::ScheduleTimeout {
@@ -512,7 +535,7 @@ impl AiApp {
             return;
         };
 
-        if io.app_ctx.yolo || tool.is_auto_approved() {
+        if io.app_ctx.yolo {
             self.handle_fsm(
                 Event::PermissionResolved {
                     tool_id,
@@ -538,12 +561,21 @@ impl AiApp {
 
         let working_dir = tool
             .target_dir()
-            .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
+        let skills =
+            matches!(tool, ClientToolCall::LoadSkill(_)).then(|| io.skill_registry.clone());
 
         ctx.perform(async move {
             use crate::permissions::check::PermissionResponse as Check;
+            // A skill is only text unless it embeds commands, which run as it loads: only those
+            // need permission.
+            if let (Some(skills), ClientToolCall::LoadSkill(call)) = (&skills, &tool)
+                && !skills.runs_commands(&call.name).await
+            {
+                let response = PermissionResponse::Allowed;
+                return Msg::Fsm(Event::PermissionResolved { tool_id, response });
+            }
             let response =
                 match crate::permissions::resolver::PermissionResolver::new(working_dir).await {
                     Ok(resolver) => match resolver.check(&tool) {
@@ -624,7 +656,10 @@ impl AiApp {
                     tracing::warn!("Failed to snapshot before write: {e}");
                 }
 
-                let (outcome, written_bytes) = write_call.execute(&resolved);
+                let (outcome, written_bytes) = match &self.io {
+                    Some(io) => write_call.execute(&resolved, &io.file_tracker),
+                    None => write_call.execute(&resolved, &Default::default()),
+                };
 
                 if let Some(new_bytes) = &written_bytes
                     && let Some(io) = &mut self.io
@@ -649,27 +684,29 @@ impl AiApp {
                 );
             }
             ClientToolCall::Read(read_call) => {
-                let outcome = read_call.execute();
-
-                if !outcome.is_error() {
-                    let resolved = read_call.resolved_path();
-                    if resolved.is_file()
-                        && let Some(io) = &mut self.io
-                        && let Ok(content) = std::fs::read(&resolved)
-                        && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
-                    {
-                        io.file_tracker.record_read(resolved, &content, mtime);
-                    }
-                }
-
-                self.handle_fsm(
-                    Event::ToolExecutionDone {
+                // Off the UI thread: hashing all of a big file, for checking later changes
+                // against, takes a while.
+                ctx.perform(async move {
+                    let read = tokio::task::spawn_blocking(move || {
+                        let outcome = read_call.execute();
+                        let path = read_call.resolved_path();
+                        let seen = (!outcome.is_error() && path.is_file())
+                            .then(|| crate::file_tracker::FileReadState::of(&path).ok())
+                            .flatten()
+                            .map(|state| (path, state));
+                        (outcome, seen)
+                    })
+                    .await;
+                    let (outcome, seen) = read.unwrap_or_else(|err| {
+                        (crate::tools::ToolOutcome::Error(format!("Failed to read: {err}")), None)
+                    });
+                    Msg::FileRead {
                         tool_id,
                         outcome,
-                        preview: None,
-                    },
-                    ctx,
-                );
+                        seen,
+                    }
+                })
+                .detach();
             }
             ClientToolCall::AtuinHistory(history_call) => {
                 let Some(io) = &self.io else {
@@ -1033,6 +1070,24 @@ impl App for AiApp {
                 self.handle_fsm(Event::ModelSelected(alias), ctx);
             }
             Msg::Fsm(event) => self.handle_fsm(event, ctx),
+            Msg::FileRead {
+                tool_id,
+                outcome,
+                seen,
+            } => {
+                if let (Some((path, state)), Some(io)) = (seen, &mut self.io) {
+                    io.file_tracker.record(path, state);
+                }
+                let preview = None;
+                self.handle_fsm(
+                    Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview,
+                    },
+                    ctx,
+                );
+            }
         }
     }
 
@@ -1282,6 +1337,28 @@ mod tests {
 
         fn stream(&mut self, event: Event) {
             self.process(Msg::Fsm(event));
+        }
+
+        /// Run the work the last input or message spawned (`ctx.perform`, `ctx.spawn`) to the
+        /// end, delivering what it sends, as the driver would; then the work that spawned.
+        fn run_spawned(&mut self) {
+            use futures::StreamExt as _;
+
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a test runtime");
+            loop {
+                let effects = self.rt.take_effects();
+                if effects.is_empty() {
+                    return;
+                }
+                for eye_declare::Effect::Spawn { stream, .. } in effects {
+                    for msg in runtime.block_on(stream.collect::<Vec<_>>()) {
+                        self.process(msg);
+                    }
+                }
+            }
         }
 
         fn app(&self) -> &AiApp {
@@ -1765,6 +1842,18 @@ mod tests {
     }
 
     #[rstest]
+    fn a_denied_shell_call_shows_as_denied(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
+        h.press(KeyCode::Up); // wrap to Deny
+        h.press(KeyCode::Enter);
+
+        let screen = h.all_lines();
+        assert!(screen.contains("denied"), "{screen}");
+        assert!(!screen.contains("Running"), "{screen}");
+    }
+
+    #[rstest]
     fn ctrl_c_interrupts_from_the_moment_a_shell_spawns(
         #[from(harness_awaiting_shell_permission)] mut h: Harness,
     ) {
@@ -1800,7 +1889,7 @@ mod tests {
     }
 
     #[rstest]
-    fn allowed_read_tool_executes_inline() {
+    fn an_allowed_read_delivers_the_file() {
         use std::io::Write as _;
         let mut file = tempfile::NamedTempFile::new().unwrap();
         writeln!(file, "hello from the file").unwrap();
@@ -1818,7 +1907,9 @@ mod tests {
         h.stream(Event::StreamDone {
             session_id: "s1".into(),
         });
+        drop(h.rt.take_effects());
         h.press(KeyCode::Enter); // Allow
+        h.run_spawned();
 
         let app = h.app();
         assert!(

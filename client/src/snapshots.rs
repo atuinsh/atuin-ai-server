@@ -64,6 +64,11 @@ impl SnapshotStore {
         })
     }
 
+    /// The store for another session, beside this one.
+    pub fn for_session(&self, session_id: &str) -> Result<Self> {
+        Self::open(self.session_dir.with_file_name(session_id))
+    }
+
     /// Snapshot a file's contents if it hasn't been snapshotted yet this session.
     ///
     /// Returns `true` if a new snapshot was created, `false` if one already
@@ -281,6 +286,23 @@ mod tests {
         let session_dir = dir.path().join("session-abc");
         let store = SnapshotStore::open(session_dir.clone()).unwrap();
         (dir, session_dir, store)
+    }
+
+    #[rstest]
+    fn another_session_starts_with_no_snapshots(
+        #[from(store)] (_dir, session_dir, mut store): (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            SnapshotStore,
+        ),
+    ) {
+        let file_path = Path::new("/Users/me/.config/foo.toml");
+        store.ensure_snapshot(file_path, b"old").unwrap();
+
+        let mut next = store.for_session("session-def").unwrap();
+        assert!(!next.has_snapshot(file_path));
+        assert!(next.ensure_snapshot(file_path, b"newer").unwrap());
+        assert!(session_dir.with_file_name("session-def").join("manifest.json").exists());
     }
 
     #[rstest]

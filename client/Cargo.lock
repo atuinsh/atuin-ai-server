@@ -187,6 +187,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rstest",
+ "rustix",
  "secrecy",
  "serde",
  "serde_json",

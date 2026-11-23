@@ -20,6 +20,52 @@ use crate::ansi;
 use crate::history::{self, History, HistoryDb, SearchMode};
 use crate::permissions::rule::Rule;
 
+/// `path` made absolute against the working directory, with `.` and `..` removed but symlinks
+/// left alone: the spelling a user's rules are most likely written in.
+fn absolute_path(path: &Path) -> PathBuf {
+    let absolute =
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path));
+    absolute.components().fold(PathBuf::new(), |mut out, component| {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+        out
+    })
+}
+
+/// The file a tool's `path` names: absolute, with `.`, `..` and symlinks resolved, so a write goes
+/// through a symlink rather than replacing it. A path that doesn't exist yet keeps its missing tail
+/// under its deepest existing ancestor, resolved.
+fn resolve_tool_path(path: &Path) -> PathBuf {
+    let absolute =
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path));
+    if let Ok(real) = std::fs::canonicalize(&absolute) {
+        return real;
+    }
+    let lexical = absolute_path(path);
+    lexical
+        .ancestors()
+        .skip(1)
+        .find_map(|ancestor| {
+            let real = std::fs::canonicalize(ancestor).ok()?;
+            Some(real.join(lexical.strip_prefix(ancestor).ok()?))
+        })
+        .unwrap_or(lexical)
+}
+
+/// Whether a rule's `scope` glob matches the file `path` names, spelled either as written or
+/// resolved. A deny rule then catches an alias of the file it names, such as `a/../secret` or a
+/// symlink, and a rule written through a symlinked directory (`/tmp` on macOS) still matches.
+fn file_matches_scope(path: &Path, scope: &str) -> bool {
+    [absolute_path(path), resolve_tool_path(path)]
+        .iter()
+        .any(|spelling| path_matches_scope(spelling, scope))
+}
+
 /// Check whether a file path matches a scope glob pattern.
 ///
 /// Resolves relative paths against the current directory before matching so
@@ -48,14 +94,17 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
         if glob_match::glob_match(scope, &path_str) {
             return true;
         }
-        // And match relative to cwd (so "src/*.rs" works from project root)
-        if let Ok(cwd) = std::env::current_dir()
-            && let Ok(rel) = path.strip_prefix(&cwd)
-        {
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            return glob_match::glob_match(scope, &rel_str);
-        }
-        return false;
+        // And match relative to cwd (so "src/*.rs" works from project root), spelled either way
+        // like the path.
+        let Ok(cwd) = std::env::current_dir() else {
+            return false;
+        };
+        let resolved_cwd = std::fs::canonicalize(&cwd).ok();
+        return [Some(cwd), resolved_cwd].into_iter().flatten().any(|cwd| {
+            path.strip_prefix(&cwd).is_ok_and(|rel| {
+                glob_match::glob_match(scope, &rel.to_string_lossy().replace('\\', "/"))
+            })
+        });
     }
 
     // Absolute scope — match against absolute path
@@ -252,16 +301,10 @@ pub trait PermissibleToolCall {
         rules.iter().any(|r| self.matches_rule(r))
     }
 
-    /// Returns the target directory of this tool call, if applicable, for checking against directory-based rules.
-    fn target_dir(&self) -> Option<&Path> {
+    /// The directory whose permission files apply to this call, and their parents': for a file
+    /// tool, the directory of the resolved file.
+    fn target_dir(&self) -> Option<PathBuf> {
         None
-    }
-}
-
-/// Returns true if this tool call should bypass the permission system entirely.
-impl ClientToolCall {
-    pub(crate) fn is_auto_approved(&self) -> bool {
-        matches!(self, Self::LoadSkill(_))
     }
 }
 
@@ -304,13 +347,7 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
 
 impl ReadToolCall {
     pub fn resolved_path(&self) -> PathBuf {
-        if self.path.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
-                .unwrap_or_else(|_| self.path.clone())
-        } else {
-            self.path.clone()
-        }
+        resolve_tool_path(&self.path)
     }
 
     #[must_use]
@@ -380,8 +417,8 @@ impl ReadToolCall {
 }
 
 impl PermissibleToolCall for ReadToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        Some(&self.path)
+    fn target_dir(&self) -> Option<PathBuf> {
+        self.resolved_path().parent().map(Path::to_path_buf)
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -392,7 +429,7 @@ impl PermissibleToolCall for ReadToolCall {
 
         match rule.scope.as_deref() {
             None | Some("*") => true,
-            Some(scope) => path_matches_scope(&self.path, scope),
+            Some(scope) => file_matches_scope(&self.path, scope),
         }
     }
 }
@@ -438,13 +475,7 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
 impl EditToolCall {
     /// Resolve the edit path to an absolute path.
     pub fn resolved_path(&self) -> PathBuf {
-        if self.path.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
-                .unwrap_or_else(|_| self.path.clone())
-        } else {
-            self.path.clone()
-        }
+        resolve_tool_path(&self.path)
     }
 
     /// Execute the edit against the filesystem.
@@ -461,8 +492,6 @@ impl EditToolCall {
         resolved_path: &Path,
         file_tracker: &crate::file_tracker::FileReadTracker,
     ) -> (ToolOutcome, Option<Vec<u8>>) {
-        use crate::file_tracker::FreshnessCheck;
-
         // 1. Basic validation
         if !resolved_path.exists() {
             return (
@@ -493,29 +522,8 @@ impl EditToolCall {
         }
 
         // 2. Freshness check
-        match file_tracker.check_freshness(resolved_path) {
-            Ok(FreshnessCheck::NotRead) => {
-                return (
-                    ToolOutcome::Error(
-                        "File has not been read yet. Read it first before editing.".to_string(),
-                    ),
-                    None,
-                );
-            }
-            Ok(FreshnessCheck::Stale) => {
-                return (
-                    ToolOutcome::Error(
-                        "File has been modified since read, either by the user or by a linter. \
-                         Read it again before attempting to edit it."
-                            .to_string(),
-                    ),
-                    None,
-                );
-            }
-            Err(e) => {
-                return (ToolOutcome::Error(format!("Error checking file state: {e}")), None);
-            }
-            Ok(FreshnessCheck::Fresh) => {}
+        if let Some(error) = unseen_changes(file_tracker, resolved_path) {
+            return (error, None);
         }
 
         // 3. Read current contents
@@ -580,8 +588,8 @@ impl EditToolCall {
 }
 
 impl PermissibleToolCall for EditToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        Some(&self.path)
+    fn target_dir(&self) -> Option<PathBuf> {
+        self.resolved_path().parent().map(Path::to_path_buf)
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -591,7 +599,7 @@ impl PermissibleToolCall for EditToolCall {
 
         match rule.scope.as_deref() {
             None | Some("*") => true,
-            Some(scope) => path_matches_scope(&self.path, scope),
+            Some(scope) => file_matches_scope(&self.path, scope),
         }
     }
 }
@@ -625,24 +633,43 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
     }
 }
 
+/// The error for changing an existing file the model hasn't read, or has read before it last
+/// changed: either way, the change could discard content the model never saw.
+fn unseen_changes(
+    file_tracker: &crate::file_tracker::FileReadTracker,
+    path: &Path,
+) -> Option<ToolOutcome> {
+    use crate::file_tracker::FreshnessCheck;
+
+    let message = match file_tracker.check_freshness(path) {
+        Ok(FreshnessCheck::Fresh) => return None,
+        Ok(FreshnessCheck::NotRead) => {
+            "File has not been read yet. Read it first before changing it.".to_owned()
+        }
+        Ok(FreshnessCheck::Stale) => "File has been modified since read, either by the user or by \
+                                      a linter. Read it again before attempting to change it."
+            .to_owned(),
+        Err(e) => format!("Error checking file state: {e}"),
+    };
+    Some(ToolOutcome::Error(message))
+}
+
 impl WriteToolCall {
     /// Resolve the write path to an absolute path.
     pub fn resolved_path(&self) -> PathBuf {
-        if self.path.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
-                .unwrap_or_else(|_| self.path.clone())
-        } else {
-            self.path.clone()
-        }
+        resolve_tool_path(&self.path)
     }
 
     /// Execute the write operation.
     ///
-    /// Creates a new file or overwrites an existing one (if `overwrite` is set).
-    /// Returns the outcome and the written bytes (for tracker updates).
+    /// Creates a new file or overwrites an existing one (if `overwrite` is set) that the model has
+    /// read since it last changed. Returns the outcome and the written bytes (for tracker updates).
     #[must_use]
-    pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
+    pub fn execute(
+        &self,
+        resolved_path: &Path,
+        file_tracker: &crate::file_tracker::FileReadTracker,
+    ) -> (ToolOutcome, Option<Vec<u8>>) {
         if resolved_path.is_dir() {
             return (
                 ToolOutcome::Error(format!(
@@ -665,6 +692,9 @@ impl WriteToolCall {
 
         // Capture before the write — after atomic_write the file always exists.
         let existed = resolved_path.exists();
+        if existed && let Some(error) = unseen_changes(file_tracker, resolved_path) {
+            return (error, None);
+        }
 
         // Write atomically
         let content_bytes = self.content.as_bytes().to_vec();
@@ -689,8 +719,8 @@ impl WriteToolCall {
 }
 
 impl PermissibleToolCall for WriteToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        Some(&self.path)
+    fn target_dir(&self) -> Option<PathBuf> {
+        self.resolved_path().parent().map(Path::to_path_buf)
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -700,7 +730,7 @@ impl PermissibleToolCall for WriteToolCall {
 
         match rule.scope.as_deref() {
             None | Some("*") => true,
-            Some(scope) => path_matches_scope(&self.path, scope),
+            Some(scope) => file_matches_scope(&self.path, scope),
         }
     }
 }
@@ -744,8 +774,8 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
 }
 
 impl PermissibleToolCall for ShellToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        self.dir.as_deref()
+    fn target_dir(&self) -> Option<PathBuf> {
+        self.dir.as_deref().map(resolve_tool_path)
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -770,11 +800,20 @@ impl PermissibleToolCall for ShellToolCall {
     fn all_covered_by(&self, rules: &[Rule]) -> bool {
         use crate::permissions::shell;
 
+        let allows_everything = rules
+            .iter()
+            .any(|rule| rule.tool == "Shell" && matches!(rule.scope.as_deref(), None | Some("*")));
+        if allows_everything {
+            return true;
+        }
+
         let shell_kind = shell::ShellKind::from_shell_name(&self.shell);
         let parsed = shell::parse_shell_command(&self.command, shell_kind);
 
-        // If parsing yields nothing, don't vacuously allow — fall through to ask.
-        !parsed.subcommands.is_empty()
+        // If parsing yields nothing, or may have missed a nested command, don't vacuously
+        // allow: fall through to ask.
+        !parsed.opaque
+            && !parsed.subcommands.is_empty()
             && parsed.subcommands.iter().all(|subcmd| {
                 rules.iter().any(|rule| {
                     if rule.tool != "Shell" {
@@ -829,6 +868,18 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     lines
 }
 
+/// How much of a command's raw output to keep, from the end, for its result.
+const RAW_OUTPUT_LIMIT_BYTES: usize = 2 * ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE;
+
+/// Append `chunk` to `buf`, keeping only the last [`RAW_OUTPUT_LIMIT_BYTES`]. Trimmed once it holds
+/// twice that, so appending stays cheap.
+fn push_tail(buf: &mut Vec<u8>, chunk: &[u8]) {
+    buf.extend_from_slice(chunk);
+    if buf.len() > 2 * RAW_OUTPUT_LIMIT_BYTES {
+        buf.drain(..buf.len() - RAW_OUTPUT_LIMIT_BYTES);
+    }
+}
+
 /// Execute a shell command with VT100 emulation and streaming output.
 ///
 /// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
@@ -850,8 +901,11 @@ pub async fn execute_shell_command_streaming(
     // TODO: check if this is proper for all shells we support
     let mut cmd = tokio::process::Command::new(&shell_call.shell);
     cmd.arg("-c").arg(&shell_call.command);
+    // The TUI owns the terminal: a command can't prompt on it.
+    cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    crate::process::own_group(&mut cmd);
 
     if let Some(ref dir) = shell_call.dir {
         cmd.current_dir(dir);
@@ -886,66 +940,60 @@ pub async fn execute_shell_command_streaming(
     let initial_lines = vt100_screen_lines(parser.screen());
     let _ = output_tx.send(initial_lines).await;
 
+    enum Step {
+        Interrupt,
+        Exited(std::io::Result<std::process::ExitStatus>),
+        Stdout(std::io::Result<usize>),
+        Stderr(std::io::Result<usize>),
+        Tick,
+    }
+
     let mut interrupted = false;
+    let mut status = None;
 
-    loop {
-        tokio::select! {
+    // Until the shell has exited and its output closed, either of which can come first: a
+    // background job can hold the output open after the shell exits, and a command can close its
+    // output and keep running. An interrupt stops it either way.
+    while status.is_none() || !stdout_done || !stderr_done {
+        let step = tokio::select! {
             biased;
+            _ = &mut interrupt_rx, if !interrupted => Step::Interrupt,
+            result = child.wait(), if status.is_none() => Step::Exited(result),
+            result = stdout_reader.read(&mut stdout_buf), if !stdout_done => Step::Stdout(result),
+            result = stderr_reader.read(&mut stderr_buf), if !stderr_done => Step::Stderr(result),
+            _ = interval.tick() => Step::Tick,
+        };
 
-            // Check for interrupt signal
-            _ = &mut interrupt_rx, if !interrupted => {
+        match step {
+            Step::Interrupt => {
                 interrupted = true;
-                let _ = child.start_kill();
+                crate::process::kill_tree(&mut child);
             }
-
-            // Read stdout
-            result = stdout_reader.read(&mut stdout_buf), if !stdout_done => {
-                match result {
-                    Ok(0) => stdout_done = true,
-                    Ok(n) => {
-                        full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
-                    }
-                    Err(_) => stdout_done = true,
-                }
+            Step::Exited(result) => status = Some(result),
+            Step::Stdout(Ok(0) | Err(_)) => stdout_done = true,
+            Step::Stdout(Ok(n)) => {
+                push_tail(&mut full_stdout, &stdout_buf[..n]);
+                ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
             }
-
-            // Read stderr
-            result = stderr_reader.read(&mut stderr_buf), if !stderr_done => {
-                match result {
-                    Ok(0) => stderr_done = true,
-                    Ok(n) => {
-                        full_stderr.extend_from_slice(&stderr_buf[..n]);
-                        // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
-                    }
-                    Err(_) => stderr_done = true,
-                }
+            Step::Stderr(Ok(0) | Err(_)) => stderr_done = true,
+            Step::Stderr(Ok(n)) => {
+                push_tail(&mut full_stderr, &stderr_buf[..n]);
+                // Feed stderr to the preview parser too, so it shows in the VT100 screen
+                ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
             }
-
-            // Periodic screen snapshot for preview
-            _ = interval.tick() => {
+            Step::Tick => {
                 let lines = vt100_screen_lines(parser.screen());
                 let _ = output_tx.send(lines).await;
             }
         }
-
-        // Exit when both streams are done
-        if stdout_done && stderr_done {
-            break;
-        }
     }
 
-    // Wait for process to finish
-    let exit_code = match child.wait().await {
-        Ok(status) => status.code(),
-        Err(e) => {
-            if interrupted {
-                None
-            } else {
-                return ToolOutcome::Error(format!("Failed to wait for command: {e}"));
-            }
+    let exit_code = match status {
+        Some(Ok(status)) => status.code(),
+        Some(Err(e)) if !interrupted => {
+            return ToolOutcome::Error(format!("Failed to wait for command: {e}"));
         }
+        Some(Err(_)) | None => None,
     };
 
     let duration = start.elapsed();
@@ -1064,10 +1112,6 @@ fn fill_with_loose(results: &mut Vec<History>, loose: Vec<History>, size: usize)
 }
 
 impl PermissibleToolCall for AtuinHistoryToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        None
-    }
-
     fn matches_rule(&self, rule: &Rule) -> bool {
         rule.tool == "AtuinHistory"
     }
@@ -1205,10 +1249,6 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
 }
 
 impl PermissibleToolCall for LoadSkillToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        None
-    }
-
     fn matches_rule(&self, rule: &Rule) -> bool {
         rule.tool == "LoadSkill"
     }
@@ -1307,6 +1347,44 @@ mod tests {
     #[case::write_implies_read(write_rule(None), true)]
     fn read_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
         assert_eq!(read_tool("foo.txt").matches_rule(&rule), expected);
+    }
+
+    /// A project with `secret.txt` in it, a symlink to it, and a subdirectory. Resolved, so the
+    /// paths match their resolved spelling on macOS, where the temp dir is under a symlink.
+    #[cfg(unix)]
+    fn project_with_secret() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = std::fs::canonicalize(dir.path()).expect("the temp dir resolves");
+        std::fs::write(root.join("secret.txt"), "hunter2").expect("the secret is written");
+        std::fs::create_dir(root.join("sub")).expect("the subdirectory is created");
+        std::os::unix::fs::symlink(root.join("secret.txt"), root.join("link.txt"))
+            .expect("the symlink is created");
+        (dir, root)
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::direct("secret.txt")]
+    #[case::dot_dot("sub/../secret.txt")]
+    #[case::dot("./secret.txt")]
+    #[case::symlink("link.txt")]
+    fn a_deny_rule_catches_every_spelling_of_its_file(#[case] spelling: &str) {
+        let (_dir, root) = project_with_secret();
+        let deny = read_rule(Some(&root.join("secret.txt").to_string_lossy()));
+        let call = read_tool(&root.join(spelling).to_string_lossy());
+        assert!(call.matches_rule(&deny), "{spelling}");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn file_tools_resolve_their_target() {
+        let (_dir, root) = project_with_secret();
+        let through_link = read_tool(&root.join("sub/../link.txt").to_string_lossy());
+        assert_eq!(through_link.resolved_path(), root.join("secret.txt"));
+        assert_eq!(through_link.target_dir(), Some(root.clone()));
+
+        let new_file = write_tool(&root.join("sub/./new/../new.txt").to_string_lossy());
+        assert_eq!(new_file.resolved_path(), root.join("sub/new.txt"));
     }
 
     #[rstest]
@@ -1448,6 +1526,54 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(shell_tool(command).all_covered_by(&rules), expected);
+    }
+
+    #[rstest]
+    #[case::newline("git status\nrm -rf x")]
+    #[case::background("git status & rm -rf x")]
+    #[case::substitution("git status $(rm -rf x)")]
+    #[case::expansion_default("git status ${x:-$(rm -rf x)}")]
+    #[case::quoted_substitution("git commit -m \"$(rm -rf x)\"")]
+    fn an_allow_rule_does_not_cover_a_hidden_command(
+        #[values("bash", "fish", "nu")] shell: &str,
+        #[case] command: &str,
+    ) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool(command)
+        };
+        assert!(!call.all_covered_by(&[shell_rule(Some("git *"))]), "{shell}: {command:?}");
+    }
+
+    /// Fish has no backtick substitution: there, the backticks are part of the arguments.
+    #[rstest]
+    fn an_allow_rule_does_not_cover_a_backtick_substitution(#[values("bash", "nu")] shell: &str) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool("git status `rm -rf x`")
+        };
+        assert!(!call.all_covered_by(&[shell_rule(Some("git *"))]), "{shell}");
+    }
+
+    #[rstest]
+    fn an_unscoped_allow_rule_covers_an_unreadable_command(
+        #[values("bash", "fish", "nu")] shell: &str,
+    ) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool("git status $(rm -rf x) ${unclosed")
+        };
+        assert!(call.all_covered_by(&[shell_rule(None)]), "{shell}");
+        assert!(call.all_covered_by(&[shell_rule(Some("*"))]), "{shell}");
+    }
+
+    #[rstest]
+    fn an_allow_rule_covers_a_redirect(#[values("bash", "fish", "nu")] shell: &str) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool("git log --oneline 2>&1")
+        };
+        assert!(call.all_covered_by(&[shell_rule(Some("git *"))]), "{shell}");
     }
 
     #[rstest]
@@ -1865,6 +1991,54 @@ mod tests {
         }
     }
 
+    #[rstest]
+    fn push_tail_keeps_the_end_within_twice_the_limit() {
+        let mut buf = Vec::new();
+        let chunk = vec![b'a'; RAW_OUTPUT_LIMIT_BYTES / 4];
+        for _ in 0..12 {
+            push_tail(&mut buf, &chunk);
+            assert!(buf.len() <= 2 * RAW_OUTPUT_LIMIT_BYTES, "{}", buf.len());
+        }
+        push_tail(&mut buf, b"the end");
+        assert!(buf.len() >= RAW_OUTPUT_LIMIT_BYTES);
+        assert!(buf.ends_with(b"the end"));
+    }
+
+    /// Each command keeps running past its shell's death or its output's close; only stopping
+    /// its process group, while still watching for the interrupt, ends it promptly.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::background_job_holds_the_output("sleep 30 & touch {ready}; wait")]
+    #[case::output_closed_early("exec >/dev/null 2>&1; touch {ready}; sleep 30")]
+    #[tokio::test]
+    async fn an_interrupt_stops_the_whole_command(#[case] command: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let command = command.replace("{ready}", &ready.to_string_lossy());
+        let call = ShellToolCall::try_from(&serde_json::json!({ "command": command })).unwrap();
+        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move { while output_rx.recv().await.is_some() {} });
+        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let _ = interrupt_tx.send(());
+        });
+
+        let run = execute_shell_command_streaming(&call, output_tx, interrupt_rx);
+        let outcome = tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("the interrupt stops the command");
+        assert!(
+            matches!(outcome, ToolOutcome::Structured {
+                interrupted: true,
+                ..
+            }),
+            "{outcome:?}"
+        );
+    }
+
     // ── write_file execution tests ──
 
     mod write {
@@ -1884,7 +2058,7 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
                 overwrite: false,
             };
-            let (outcome, new_bytes) = call.execute(&path);
+            let (outcome, new_bytes) = call.execute(&path, &Default::default());
 
             assert!(matches!(outcome, ToolOutcome::Success(ref s) if s.contains("Created")));
             assert!(new_bytes.is_some());
@@ -1903,13 +2077,16 @@ mod tests {
         ) {
             let path = tempdir.path().join("existing.txt");
             std::fs::write(&path, "original").unwrap();
+            let mut tracker = crate::file_tracker::FileReadTracker::default();
+            let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+            tracker.record_read(path.clone(), b"original", mtime);
 
             let call = WriteToolCall {
                 path: path.clone(),
                 content: new_content.to_string(),
                 overwrite,
             };
-            let (outcome, new_bytes) = call.execute(&path);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
 
             if expect_error {
                 assert!(new_bytes.is_none());
@@ -1936,10 +2113,42 @@ mod tests {
                 content: "nested\n".to_string(),
                 overwrite: false,
             };
-            let (outcome, _) = call.execute(&path);
+            let (outcome, _) = call.execute(&path, &Default::default());
 
             assert!(matches!(outcome, ToolOutcome::Success(_)));
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "nested\n");
+        }
+
+        /// Overwriting what the model hasn't seen would lose it: a file never read, or changed
+        /// since (here recorded as read long ago with other content).
+        #[rstest]
+        #[case::never_read(None, "not been read yet")]
+        #[case::changed_since_read(Some(b"what the model saw".as_slice()), "modified since read")]
+        fn overwriting_needs_a_fresh_read(
+            tempdir: tempfile::TempDir,
+            #[case] read: Option<&[u8]>,
+            #[case] expected_error: &str,
+        ) {
+            let path = tempdir.path().join("existing.txt");
+            std::fs::write(&path, "the user's latest").unwrap();
+            let mut tracker = crate::file_tracker::FileReadTracker::default();
+            if let Some(content) = read {
+                tracker.record_read(path.clone(), content, std::time::SystemTime::UNIX_EPOCH);
+            }
+
+            let call = WriteToolCall {
+                path: path.clone(),
+                content: "the model's version".to_string(),
+                overwrite: true,
+            };
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            assert!(
+                matches!(outcome, ToolOutcome::Error(ref msg) if msg.contains(expected_error)),
+                "{outcome:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "the user's latest");
         }
 
         #[rstest]
@@ -1951,7 +2160,7 @@ mod tests {
                 content: "content".to_string(),
                 overwrite: false,
             };
-            let (outcome, new_bytes) = call.execute(&path);
+            let (outcome, new_bytes) = call.execute(&path, &Default::default());
 
             assert!(new_bytes.is_none());
             assert!(matches!(outcome, ToolOutcome::Error(ref msg) if msg.contains("directory")));

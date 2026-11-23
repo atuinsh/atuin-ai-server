@@ -10,6 +10,7 @@
 //! invocations within the same logical session.
 
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -29,6 +30,35 @@ pub struct FileReadState {
     pub mtime_ms: i64,
 }
 
+impl FileReadState {
+    /// The file at `path` as it is now. Hashed in chunks, so a huge file costs no more memory than
+    /// a small one.
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        let mtime_ms = unix_millis(std::fs::metadata(path)?.modified()?);
+        Ok(Self {
+            content_hash: hash_file(path)?,
+            mtime_ms,
+        })
+    }
+}
+
+/// [`FileReadTracker::hash_content`] of the file at `path`, read in chunks.
+fn hash_file(path: &Path) -> std::io::Result<u64> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    let mut chunk = vec![0; CHUNK_BYTES];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => return Ok(hasher.digest()),
+            Ok(n) => hasher.update(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Tracks file read state for freshness checking.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct FileReadTracker {
@@ -46,8 +76,14 @@ pub enum FreshnessCheck {
 }
 
 impl FileReadTracker {
-    /// Record that a file was read. Call this after a successful `read_file`
-    /// execution. The `path` should be canonical (absolute, tilde-expanded).
+    /// Record what a `read_file` saw of the file at `path`, which should be canonical.
+    pub fn record(&mut self, path: PathBuf, state: FileReadState) {
+        self.reads.insert(path, state);
+    }
+
+    /// Record that a file was read, with `content` and `mtime`. The `path` should be canonical
+    /// (absolute, tilde-expanded).
+    #[cfg(test)]
     pub fn record_read(&mut self, path: PathBuf, content: &[u8], mtime: SystemTime) {
         let content_hash = Self::hash_content(content);
         let mtime_ms = unix_millis(mtime);
@@ -80,8 +116,7 @@ impl FileReadTracker {
         }
 
         // Mtime changed — re-hash to confirm
-        let content = std::fs::read(path)?;
-        let current_hash = Self::hash_content(&content);
+        let current_hash = hash_file(path)?;
 
         if current_hash == state.content_hash {
             Ok(FreshnessCheck::Fresh)
@@ -124,6 +159,17 @@ fn unix_millis(time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[rstest::rstest]
+    fn a_file_hashed_in_chunks_hashes_as_a_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        let content: Vec<u8> = (0..200_000u32).flat_map(u32::to_le_bytes).collect();
+        std::fs::write(&path, &content).unwrap();
+
+        let state = FileReadState::of(&path).unwrap();
+        assert_eq!(state.content_hash, FileReadTracker::hash_content(&content));
+    }
+
     use std::io::Write;
 
     use rstest::*;
