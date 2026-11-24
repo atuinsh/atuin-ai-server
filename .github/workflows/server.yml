@@ -1,13 +1,18 @@
-name: test
+name: server
 
 on:
   push:
     branches: [main]
+    paths: ["server/**", ".github/workflows/server.yml"]
   pull_request:
+    paths: ["server/**", ".github/workflows/server.yml"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1

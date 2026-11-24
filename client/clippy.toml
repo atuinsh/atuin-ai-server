@@ -1,0 +1,43 @@
+[[disallowed-methods]]
+path = "std::time::Duration::new"
+reason = "panics on overflow; use Duration::from_secs when nanos are 0"
+
+[[disallowed-methods]]
+path = "std::time::Duration::from_secs_f64"
+reason = "panics on NaN/negative/overflow; use Duration::try_from_secs_f64"
+
+[[disallowed-methods]]
+path = "std::env::set_var"
+reason = "unsound; pass the value in as a parameter instead"
+
+[[disallowed-methods]]
+path = "std::env::remove_var"
+reason = "unsound; pass the value in as a parameter instead"
+
+[[disallowed-types]]
+path = "std::sync::Mutex"
+reason = "use parking_lot::Mutex which is faster"
+
+[[disallowed-types]]
+path = "std::sync::MutexGuard"
+reason = "use parking_lot::MutexGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLock"
+reason = "use parking_lot::RwLock which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLockReadGuard"
+reason = "use parking_lot::RwLockReadGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLockWriteGuard"
+reason = "use parking_lot::RwLockWriteGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::Condvar"
+reason = "use parking_lot::Condvar which is faster"
+
+[[disallowed-types]]
+path = "std::sync::Once"
+reason = "use parking_lot::Once which is faster"

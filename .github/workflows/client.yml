@@ -1,0 +1,30 @@
+name: client
+
+on:
+  push:
+    branches: [main]
+    paths: ["client/**", ".github/workflows/client.yml"]
+  pull_request:
+    paths: ["client/**", ".github/workflows/client.yml"]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      # rustfmt from nightly: .rustfmt.toml uses unstable options.
+      - run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup toolchain install 1.95.0 --profile minimal
+      - run: cargo +nightly fmt --check
+      - run: cargo +stable clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo +stable test --locked --all-features
+      - name: MSRV
+        run: cargo +1.95.0 check --locked --all-targets --all-features

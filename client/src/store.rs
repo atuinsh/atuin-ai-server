@@ -1,0 +1,541 @@
+use std::path::Path;
+use std::time::Duration;
+
+use eyre::{Context as _, Result};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
+use time::OffsetDateTime;
+
+use crate::settings::ResumeWindow;
+
+// Database row mappings — all columns are kept even if not yet read in
+// non-test code, since they're part of the schema and used in tests.
+#[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct StoredSession {
+    pub id: String,
+    pub head_id: Option<String>,
+    pub server_session_id: Option<String>,
+    pub directory: Option<String>,
+    pub vcs_root: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub archived_at: Option<i64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct StoredEvent {
+    pub id: String,
+    pub session_id: String,
+    pub parent_id: Option<String>,
+    pub invocation_id: String,
+    pub event_type: String,
+    pub event_data: String,
+    pub created_at: i64,
+}
+
+pub struct AiSessionStore {
+    pool: SqlitePool,
+}
+
+impl AiSessionStore {
+    /// Open the conversation database at `path`, creating it readable by the user alone.
+    pub async fn new(path: &Path, timeout: Duration) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            fs_err::create_dir_all(dir)?;
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .foreign_keys(false)
+            .busy_timeout(timeout);
+        let store = Self::connect(options, timeout).await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs_err::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        Ok(store)
+    }
+
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        use std::str::FromStr as _;
+        Self::connect(SqliteConnectOptions::from_str(":memory:")?.foreign_keys(false), timeout)
+            .await
+    }
+
+    async fn connect(options: SqliteConnectOptions, timeout: Duration) -> Result<Self> {
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(timeout)
+            .connect_with(options)
+            .await
+            .context("failed to open the conversation database")?;
+
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        // sqlx caches prepared statements per connection, and a statement prepared before a
+        // migration keeps the old column list: https://github.com/launchbadge/sqlx/issues/2517
+        let mut conn = pool.acquire().await?;
+        sqlx::Connection::clear_cached_statements(&mut *conn).await?;
+        drop(conn);
+
+        Ok(Self { pool })
+    }
+
+    pub async fn create_session(
+        &self,
+        id: &str,
+        directory: Option<&str>,
+        vcs_root: Option<&str>,
+    ) -> Result<StoredSession> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        sqlx::query(
+            "INSERT INTO sessions (id, directory, vcs_root, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+        )
+        .bind(id)
+        .bind(directory)
+        .bind(vcs_root)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(StoredSession {
+            id: id.to_string(),
+            head_id: None,
+            server_session_id: None,
+            directory: directory.map(String::from),
+            vcs_root: vcs_root.map(String::from),
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        })
+    }
+
+    #[allow(dead_code)] // used in tests
+    pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
+        let session = sqlx::query_as::<_, StoredSession>(
+            "SELECT id, head_id, server_session_id, directory, vcs_root,
+                    created_at, updated_at, archived_at
+             FROM sessions WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(session)
+    }
+
+    /// Find the most recent non-archived session matching the given directory or VCS
+    /// root, updated within `window`. A `None` window disables auto-resume and returns `None`.
+    pub async fn find_resumable_session(
+        &self,
+        directory: Option<&str>,
+        vcs_root: Option<&str>,
+        window: Option<ResumeWindow>,
+    ) -> Result<Option<StoredSession>> {
+        // A `None` window means auto-resume is disabled.
+        let Some(window) = window else {
+            return Ok(None);
+        };
+
+        let max_age_secs = i64::try_from(window.get().as_secs()).unwrap_or(i64::MAX);
+        let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
+
+        let session = sqlx::query_as::<_, StoredSession>(
+            "SELECT id, head_id, server_session_id, directory, vcs_root,
+                    created_at, updated_at, archived_at
+             FROM sessions
+             WHERE archived_at IS NULL
+               AND updated_at > ?1
+               AND (directory = ?2 OR (vcs_root IS NOT NULL AND vcs_root = ?3))
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(cutoff)
+        .bind(directory)
+        .bind(vcs_root)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(session)
+    }
+
+    /// Append a single event and update the session's `head_id` and `updated_at`.
+    pub async fn append_event(
+        &self,
+        session_id: &str,
+        event_id: &str,
+        parent_id: Option<&str>,
+        invocation_id: &str,
+        event_type: &str,
+        event_data: &str,
+    ) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, \
+             event_data, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(event_id)
+        .bind(session_id)
+        .bind(parent_id)
+        .bind(invocation_id)
+        .bind(event_type)
+        .bind(event_data)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("UPDATE sessions SET head_id = ?1, updated_at = ?2 WHERE id = ?3")
+            .bind(event_id)
+            .bind(now)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Load all events for a session, ordered chronologically.
+    /// The session's conversation: the chain of parents back from its head, oldest first.
+    ///
+    /// Two terminals that continue one session each append their own branch from the event they
+    /// resumed at, so the session's events can form a tree. The head is the event written last,
+    /// and only its branch is the conversation; a session without one uses its newest event.
+    pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
+        let events = sqlx::query_as::<_, StoredEvent>(
+            "WITH RECURSIVE branch(id, parent_id, depth) AS (
+                 SELECT id, parent_id, 0
+                     FROM session_events
+                     WHERE session_id = ?1
+                         AND id = COALESCE(
+                             (SELECT head_id FROM sessions WHERE id = ?1),
+                             (SELECT id FROM session_events WHERE session_id = ?1
+                                 ORDER BY created_at DESC, rowid DESC LIMIT 1))
+                 UNION ALL
+                 SELECT e.id, e.parent_id, branch.depth + 1
+                     FROM session_events e
+                     JOIN branch ON e.id = branch.parent_id
+                     WHERE e.session_id = ?1
+             )
+             SELECT e.id, e.session_id, e.parent_id, e.invocation_id, e.event_type,
+                    e.event_data, e.created_at
+                 FROM session_events e
+                 JOIN branch ON e.id = branch.id
+                 ORDER BY branch.depth DESC",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(events)
+    }
+
+    pub async fn update_server_session_id(
+        &self,
+        session_id: &str,
+        server_session_id: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
+            .bind(server_session_id)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn archive_session(&self, session_id: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sqlx::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
+            .bind(now)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ── Session metadata (key-value per session) ──
+
+    /// Read a metadata value for a session. Returns `None` if the key doesn't
+    /// exist or the session hasn't been persisted yet.
+    pub async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
+                .bind(session_id)
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    /// Write a metadata value for a session (upsert).
+    pub async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sqlx::query(
+            "INSERT INTO session_metadata (session_id, key, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (session_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
+        )
+        .bind(session_id)
+        .bind(key)
+        .bind(value)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::*;
+
+    use super::*;
+
+    #[fixture]
+    async fn store() -> AiSessionStore {
+        AiSessionStore::in_memory(Duration::from_secs(2)).await.unwrap()
+    }
+
+    #[fixture]
+    async fn store_with_s1(#[future] store: AiSessionStore) -> AiSessionStore {
+        let store = store.await;
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
+        store
+    }
+
+    /// A resume window comfortably wider than a test's runtime.
+    fn hour() -> Option<ResumeWindow> {
+        ResumeWindow::new(Duration::from_secs(3600))
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn migrations_name_repository_column_vcs_root(#[future] store: AiSessionStore) {
+        let store = store.await;
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('sessions')")
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+
+        assert!(columns.iter().any(|column| column == "vcs_root"));
+        assert!(!columns.iter().any(|column| column == "git_root"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_create_and_get_session(#[future] store: AiSessionStore) {
+        let store = store.await;
+
+        let session = store
+            .create_session("s1", Some("/home/user/project"), Some("/home/user/project"))
+            .await
+            .unwrap();
+        assert_eq!(session.id, "s1");
+        assert!(session.head_id.is_none());
+        assert!(session.archived_at.is_none());
+
+        let loaded = store.get_session("s1").await.unwrap().unwrap();
+        assert_eq!(loaded.id, "s1");
+        assert_eq!(loaded.directory.as_deref(), Some("/home/user/project"));
+    }
+
+    #[rstest]
+    #[case::unix("/tmp/O'Brien %_ 日本語")]
+    #[case::windows(r"C:\Users\O'Brien\100%_ 日本語")]
+    #[case::unc(r"\\server\share\O'Brien %_")]
+    #[case::verbatim(r"\\?\C:\O'Brien %_\trailing. ")]
+    #[case::whitespace("/tmp/line\n tab\t trailing ")]
+    #[case::predicate_injection("/tmp/x') OR 1=1 --")]
+    #[case::statement_injection("/tmp/x'); DROP TABLE sessions; --")]
+    #[tokio::test]
+    async fn session_paths_are_stored_as_data(#[future] store: AiSessionStore, #[case] root: &str) {
+        let store = store.await;
+        store.create_session("outside", Some("/outside"), Some("/outside")).await.unwrap();
+        store.create_session("selected", Some(root), Some(root)).await.unwrap();
+
+        let loaded = store.get_session("selected").await.unwrap().unwrap();
+        assert_eq!(loaded.directory.as_deref(), Some(root));
+        assert_eq!(loaded.vcs_root.as_deref(), Some(root));
+        for (directory, vcs_root) in [(Some(root), None), (None, Some(root))] {
+            let found = store.find_resumable_session(directory, vcs_root, hour()).await.unwrap();
+            assert_eq!(found.unwrap().id, "selected");
+        }
+        let outside = store.find_resumable_session(None, Some("/outside"), hour()).await.unwrap();
+        assert_eq!(outside.unwrap().id, "outside");
+        assert!(
+            store.find_resumable_session(None, Some("/missing"), hour()).await.unwrap().is_none()
+        );
+        assert!(store.get_session("selected").await.unwrap().is_some());
+    }
+
+    /// Two terminals continue a session from `e2`, each appending its own branch: loading it gives
+    /// the branch written last, never a mix of both.
+    #[rstest]
+    #[case::a_last(&[("b3", "e2"), ("a3", "e2"), ("a4", "a3")], &["e1", "e2", "a3", "a4"])]
+    #[case::b_last(&[("a3", "e2"), ("b3", "e2"), ("a4", "a3"), ("b4", "b3")], &["e1", "e2", "b3", "b4"])]
+    #[tokio::test]
+    async fn concurrent_branches_load_apart(
+        #[future] store_with_s1: AiSessionStore,
+        #[case] appends: &[(&str, &str)],
+        #[case] expected: &[&str],
+    ) {
+        let store = store_with_s1.await;
+        store.append_event("s1", "e1", None, "inv1", "user_message", "{}").await.unwrap();
+        store.append_event("s1", "e2", Some("e1"), "inv1", "text", "{}").await.unwrap();
+        for (id, parent) in appends {
+            store.append_event("s1", id, Some(parent), "inv2", "text", "{}").await.unwrap();
+        }
+
+        let events = store.load_events("s1").await.unwrap();
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_get_nonexistent_session(#[future] store: AiSessionStore) {
+        let store = store.await;
+        assert!(store.get_session("nope").await.unwrap().is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_append_and_load_events(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
+
+        store
+            .append_event("s1", "e1", None, "inv1", "user_message", r#"{"content":"hello"}"#)
+            .await
+            .unwrap();
+        store
+            .append_event("s1", "e2", Some("e1"), "inv1", "text", r#"{"content":"hi there"}"#)
+            .await
+            .unwrap();
+
+        let events = store.load_events("s1").await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "e1");
+        assert!(events[0].parent_id.is_none());
+        assert_eq!(events[0].invocation_id, "inv1");
+        assert_eq!(events[1].id, "e2");
+        assert_eq!(events[1].parent_id.as_deref(), Some("e1"));
+
+        let session = store.get_session("s1").await.unwrap().unwrap();
+        assert_eq!(session.head_id.as_deref(), Some("e2"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_find_resumable_session(#[future] store: AiSessionStore) {
+        let store = store.await;
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
+
+        let found =
+            store.find_resumable_session(Some("/home/user/project"), None, hour()).await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "s1");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_find_resumable_by_vcs_root(#[future] store: AiSessionStore) {
+        let store = store.await;
+        store
+            .create_session("s1", Some("/home/user/project/sub"), Some("/home/user/project"))
+            .await
+            .unwrap();
+
+        let found = store
+            .find_resumable_session(Some("/different/dir"), Some("/home/user/project"), hour())
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "s1");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_find_resumable_skips_archived(#[future] store: AiSessionStore) {
+        let store = store.await;
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
+        store.archive_session("s1").await.unwrap();
+
+        let found = store.find_resumable_session(Some("/tmp"), None, hour()).await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_find_resumable_no_match_different_dir(#[future] store: AiSessionStore) {
+        let store = store.await;
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
+
+        let found = store.find_resumable_session(Some("/other/dir"), None, hour()).await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_archive_session(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
+
+        store.archive_session("s1").await.unwrap();
+
+        let session = store.get_session("s1").await.unwrap().unwrap();
+        assert!(session.archived_at.is_some());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_update_server_session_id(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
+
+        store.update_server_session_id("s1", "server-abc").await.unwrap();
+
+        let session = store.get_session("s1").await.unwrap().unwrap();
+        assert_eq!(session.server_session_id.as_deref(), Some("server-abc"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_find_resumable_does_not_mutate(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
+
+        let before = store.get_session("s1").await.unwrap().unwrap();
+        store.find_resumable_session(Some("/tmp"), None, hour()).await.unwrap().unwrap();
+        let after = store.get_session("s1").await.unwrap().unwrap();
+
+        assert_eq!(before.updated_at, after.updated_at);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_events_ordered_chronologically(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
+
+        store.append_event("s1", "e1", None, "inv1", "user_message", "{}").await.unwrap();
+        store.append_event("s1", "e2", Some("e1"), "inv1", "text", "{}").await.unwrap();
+        store.append_event("s1", "e3", Some("e2"), "inv2", "user_message", "{}").await.unwrap();
+
+        let events = store.load_events("s1").await.unwrap();
+        assert_eq!(events.len(), 3);
+        assert!(events[0].created_at <= events[1].created_at);
+        assert!(events[1].created_at <= events[2].created_at);
+        assert_eq!(events[2].invocation_id, "inv2");
+    }
+}

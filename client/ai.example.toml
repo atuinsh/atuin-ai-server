@@ -1,0 +1,53 @@
+# Example settings for atuin-ai. Copy this file to ~/.atuin/ai.toml, or to ai.toml in
+# $ATUIN_CONFIG_DIR or $ATUIN_HOME when set.
+#
+# An ATUIN_AI__<KEY> environment variable overrides a key, with `__` between nested keys:
+# ATUIN_AI__MODEL=llama, or ATUIN_AI__CAPABILITIES__ENABLE_FILE_TOOLS=false.
+#
+# Coming from Atuin's built-in agent? Move the keys of the [ai] table in Atuin's config.toml
+# here, without the [ai] header: [ai.opening] becomes [opening], and [ai.capabilities] becomes
+# [capabilities].
+
+# Required. The Atuin AI server to chat with.
+# https://example.com/ai sends requests to https://example.com/ai/api/cli/chat.
+endpoint = "http://localhost:8080"
+
+## `Authorization: Bearer <token>`: set it server's AUTH_TOKEN. Unset or empty sends no token.
+## api_token = "..."
+
+## The server's model alias for new sessions. Unset uses the server's default.
+## model = "llama"
+
+## How long do atuin-ai sessions last since our last message in a conversation. 0 always starts a
+## new session.
+#session_continue_minutes = "1h"
+
+## Allow every tool call without asking. Use with caution.
+#yolo = false
+
+## Show tips at the bottom of agent turns.
+#tips = true
+
+# Atuin's history database, which the atuin_history tool searches. Set it if Atuin's config.toml
+# moves it with db_path or data_dir. A relative path is relative to this file, and ~ and $VARS
+# are expanded.
+# history_db_path = "~/.atuin/data/history.db"
+
+# What the agent tells the server it can do. A disabled capability's tools are never offered to
+# the model. Tool calls still ask first, unless a permission file allows them: see
+# docs/tools-permissions.md.
+[capabilities]
+# The atuin_history tool, which searches your Atuin history. Also off when the history database
+# can't be opened.
+# enable_history_search = true
+# The read_file, edit_file and write_file tools.
+# enable_file_tools = true
+# The execute_shell_command tool.
+# enable_command_execution = true
+
+# What the first request of a session tells the server. By default, only your OS and shell.
+[opening]
+## Your working directory. A top-level send_cwd is the deprecated spelling.
+## send_cwd = false
+## The last command in your Atuin history.
+## send_last_command = false
