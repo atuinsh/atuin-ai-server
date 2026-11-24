@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::event_serde;
 use crate::settings::ResumeWindow;
@@ -317,6 +318,36 @@ impl SessionManager {
         self.ensure_persisted().await?;
         self.service.set_metadata(&self.session_id, key, value).await
     }
+
+    /// Write a metadata value for this conversation branch: [`Self::get_branch_metadata`] returns
+    /// it only to a resume of the same branch.
+    pub async fn set_branch_metadata(&mut self, key: &str, value: &str) -> Result<()> {
+        let tagged = serde_json::to_string(&BranchMetadata {
+            head_id: self.head_id.clone(),
+            value: value.to_owned(),
+        })?;
+        self.set_metadata(key, &tagged).await
+    }
+
+    /// What [`Self::set_branch_metadata`] saved on this branch. `None` when another terminal
+    /// continuing the session has saved its own since, and for an untagged value, from an older
+    /// client: there is no telling which branch that belongs to.
+    pub async fn get_branch_metadata(&self, key: &str) -> Result<Option<String>> {
+        let Some(raw) = self.get_metadata(key).await? else {
+            return Ok(None);
+        };
+        let Ok(tagged) = serde_json::from_str::<BranchMetadata>(&raw) else {
+            return Ok(None);
+        };
+        Ok((tagged.head_id == self.head_id).then_some(tagged.value))
+    }
+}
+
+/// A metadata value and the head of the branch it was saved on. Persisted: do not rename fields.
+#[derive(Serialize, Deserialize)]
+struct BranchMetadata {
+    head_id: Option<String>,
+    value: String,
 }
 
 #[cfg(test)]
@@ -409,6 +440,46 @@ mod tests {
 
         // Persisting again with the same events should be a no-op
         mgr.persist_events(&loaded_events).await.unwrap();
+    }
+
+    /// Two terminals continue one session; the conversation resumed is the branch written last,
+    /// and only that branch's saved metadata comes with it.
+    #[rstest]
+    #[tokio::test]
+    async fn branch_metadata_stays_with_its_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ai_sessions.db");
+        let open = || async {
+            Box::new(LocalSessionService::open(&db, Duration::from_secs(2)).await.unwrap())
+        };
+        let message = |content: &str| ConversationEvent::UserMessage {
+            content: content.to_owned(),
+        };
+        let resume = || async {
+            let svc = open().await;
+            let stored = svc
+                .find_resumable(Some("/p"), None, ResumeWindow::new(Duration::from_secs(3600)))
+                .await
+                .unwrap()
+                .expect("the session is resumable");
+            SessionManager::resume(svc, &stored).await.unwrap().0
+        };
+
+        let mut a = SessionManager::create_new(open().await, Some("/p"), None);
+        a.persist_events(&[message("start")]).await.unwrap();
+        let mut b = resume().await;
+
+        b.persist_events(&[message("start"), message("from b")]).await.unwrap();
+        b.set_branch_metadata("reads", "b's reads").await.unwrap();
+        a.persist_events(&[message("start"), message("from a")]).await.unwrap();
+        assert_eq!(resume().await.get_branch_metadata("reads").await.unwrap(), None);
+
+        a.set_branch_metadata("reads", "a's reads").await.unwrap();
+        let resumed = resume().await;
+        assert_eq!(
+            resumed.get_branch_metadata("reads").await.unwrap().as_deref(),
+            Some("a's reads")
+        );
     }
 
     #[rstest]

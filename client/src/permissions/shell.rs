@@ -109,7 +109,8 @@ mod ts {
     fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // A `command` node has children like:
         //   variable_assignment* command_name argument* redirect*
-        // We want the command_name and all arguments (skipping assignments and redirects).
+        // We want the command_name, its arguments and its redirects (skipping assignments): a
+        // redirect writes a file the command alone doesn't, so an exact rule mustn't ignore it.
         let mut name = None;
         let mut name_start = None;
         let mut arg_end = None;
@@ -130,12 +131,24 @@ mod ts {
                 | "expansion"
                 | "arithmetic_expansion"
                 | "ansi_c_string"
-                | "process_substitution" => {
+                | "process_substitution"
+                | "file_redirect"
+                | "heredoc_redirect"
+                | "herestring_redirect" => {
                     arg_end = Some(child.end_byte());
                 }
                 _ => {}
             }
         }
+        // Redirects after the command belong to the `redirected_statement` it is the body of.
+        let arg_end = match node.parent() {
+            Some(parent)
+                if parent.kind() == "redirected_statement" && parent.child(0) == Some(node) =>
+            {
+                Some(parent.end_byte())
+            }
+            _ => arg_end,
+        };
 
         let name = name?;
         let full = if let (Some(start), Some(end)) = (name_start, arg_end) {

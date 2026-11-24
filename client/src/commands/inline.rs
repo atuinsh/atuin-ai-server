@@ -154,7 +154,7 @@ async fn run_inline_tui(
             let last_time = last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
             let ft = if let Ok(Some(json)) =
-                mgr.get_metadata(crate::file_tracker::METADATA_KEY).await
+                mgr.get_branch_metadata(crate::file_tracker::METADATA_KEY).await
                 && let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json)
             {
                 tracker

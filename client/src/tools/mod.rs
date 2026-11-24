@@ -66,6 +66,15 @@ fn resolve_tool_path(path: &Path) -> PathBuf {
     })
 }
 
+/// The directory whose permission files apply to the file tool target `resolved`: the target
+/// itself when it is a directory, as `read_file` lists one, else its parent.
+fn permission_dir(resolved: PathBuf) -> Option<PathBuf> {
+    if resolved.is_dir() {
+        return Some(resolved);
+    }
+    resolved.parent().map(Path::to_path_buf)
+}
+
 /// Whether a rule's `scope` glob matches the file `path` names, spelled either as written or
 /// resolved. A deny rule then catches an alias of the file it names, such as `a/../secret` or a
 /// symlink, and a rule written through a symlinked directory (`/tmp` on macOS) still matches.
@@ -427,7 +436,7 @@ impl ReadToolCall {
 
 impl PermissibleToolCall for ReadToolCall {
     fn target_dir(&self) -> Option<PathBuf> {
-        self.resolved_path().parent().map(Path::to_path_buf)
+        permission_dir(self.resolved_path())
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -598,7 +607,7 @@ impl EditToolCall {
 
 impl PermissibleToolCall for EditToolCall {
     fn target_dir(&self) -> Option<PathBuf> {
-        self.resolved_path().parent().map(Path::to_path_buf)
+        permission_dir(self.resolved_path())
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -729,7 +738,7 @@ impl WriteToolCall {
 
 impl PermissibleToolCall for WriteToolCall {
     fn target_dir(&self) -> Option<PathBuf> {
-        self.resolved_path().parent().map(Path::to_path_buf)
+        permission_dir(self.resolved_path())
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
@@ -1396,6 +1405,17 @@ mod tests {
         assert_eq!(new_file.resolved_path(), root.join("sub/new.txt"));
     }
 
+    /// `read_file` lists a directory, so that directory's own permission files apply.
+    #[cfg(unix)]
+    #[rstest]
+    fn reading_a_directory_starts_at_its_own_permissions() {
+        let (_dir, root) = project_with_secret();
+        assert_eq!(
+            read_tool(&root.join("sub").to_string_lossy()).target_dir(),
+            Some(root.join("sub"))
+        );
+    }
+
     /// `link/../new.txt` is beside the link's target, as the kernel resolves it, not beside the
     /// link.
     #[cfg(unix)]
@@ -1587,6 +1607,21 @@ mod tests {
         };
         assert!(call.all_covered_by(&[shell_rule(None)]), "{shell}");
         assert!(call.all_covered_by(&[shell_rule(Some("*"))]), "{shell}");
+    }
+
+    #[rstest]
+    #[case::write("git status > ~/.bashrc")]
+    #[case::append("git status >> ~/.bashrc")]
+    #[case::inside("git status > ~/.bashrc --short")]
+    fn an_exact_allow_rule_does_not_cover_a_redirect(
+        #[values("bash", "fish", "nu")] shell: &str,
+        #[case] command: &str,
+    ) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool(command)
+        };
+        assert!(!call.all_covered_by(&[shell_rule(Some("git status"))]), "{shell}: {command}");
     }
 
     #[rstest]
