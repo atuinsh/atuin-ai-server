@@ -9,7 +9,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Not github.repository: the repo was renamed to atuin-ai, and users pull this name.
+  IMAGE_NAME: atuinsh/atuin-ai-server
 
 jobs:
   build:

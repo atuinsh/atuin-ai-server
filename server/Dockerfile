@@ -8,7 +8,7 @@
 # resolution issues in production).
 ARG ELIXIR_VERSION=1.18.3
 ARG OTP_VERSION=27.3.4.13
-ARG DEBIAN_VERSION=bullseye-20260610-slim
+ARG DEBIAN_VERSION=bookworm-20260610-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
