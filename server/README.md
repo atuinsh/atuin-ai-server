@@ -19,6 +19,7 @@ cp config.example.toml config.toml
 docker run \
   -v ./config.toml:/etc/atuin-ai/config.toml \
   -p 8080:8080 \
+  --add-host host.docker.internal:host-gateway \
   ghcr.io/atuinsh/atuin-ai-server:latest
 ```
 
@@ -28,12 +29,11 @@ Or build your own image:
 docker build -t atuin-ai-server .
 ```
 
-To reach an engine running on the Docker host (e.g. local Ollama), use
-`host.docker.internal` as the server's endpoint:
-
-```toml
-endpoint = "http://host.docker.internal:11434/v1"
-```
+The example config reaches Ollama on the Docker host through
+`host.docker.internal`. Docker Desktop defines that name, and `--add-host`
+defines it on Linux, where it is the Docker bridge rather than loopback. Ollama
+only listens on loopback by default, so on Linux start it with
+`OLLAMA_HOST=0.0.0.0`, and keep port 11434 off the public network.
 
 ## Limitations
 

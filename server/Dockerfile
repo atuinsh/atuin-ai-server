@@ -2,7 +2,8 @@
 #
 # Run with the operator config mounted:
 #
-#   docker run -v ./config.toml:/etc/atuin-ai/config.toml -p 8080:8080 atuin-ai-server
+#   docker run -v ./config.toml:/etc/atuin-ai/config.toml -p 8080:8080 \
+#     --add-host host.docker.internal:host-gateway atuin-ai-server
 #
 # Debian rather than Alpine, matching the hub image (Alpine has DNS
 # resolution issues in production).
