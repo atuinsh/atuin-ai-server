@@ -808,8 +808,15 @@ impl PermissibleToolCall for ShellToolCall {
 
         let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
         let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
-        // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`
+        // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`. Either
+        // spelling of a command matches: `git * --amend` catches `git commit --amend > log`.
+        let redirected: Vec<_> = parsed
+            .subcommands
+            .iter()
+            .map(crate::permissions::shell::ShellCommand::as_redirected)
+            .collect();
         crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, true, scope)
+            || crate::permissions::shell::any_subcommand_matches(&redirected, true, scope)
     }
 
     /// For compound shell commands, every subcommand must be individually
@@ -840,9 +847,10 @@ impl PermissibleToolCall for ShellToolCall {
                     match rule.scope.as_deref() {
                         None | Some("*") => true,
                         // Allow path: prefix_bare = false so `Shell(git commit)`
-                        // only allows exactly `git commit`, not `git commit --amend`
+                        // only allows exactly `git commit`, not `git commit --amend`,
+                        // and with its redirects, not `git commit > ~/.bashrc`.
                         Some(scope) => shell::any_subcommand_matches(
-                            std::slice::from_ref(subcmd),
+                            std::slice::from_ref(&subcmd.as_redirected()),
                             false,
                             scope,
                         ),
@@ -1622,6 +1630,20 @@ mod tests {
             ..shell_tool(command)
         };
         assert!(!call.all_covered_by(&[shell_rule(Some("git status"))]), "{shell}: {command}");
+    }
+
+    #[rstest]
+    #[case::trailing("git commit --amend > /dev/null")]
+    #[case::stderr("git commit --amend 2>&1")]
+    fn a_deny_rule_still_matches_a_redirected_command(
+        #[values("bash", "fish", "nu")] shell: &str,
+        #[case] command: &str,
+    ) {
+        let call = ShellToolCall {
+            shell: shell.to_owned(),
+            ..shell_tool(command)
+        };
+        assert!(call.matches_rule(&shell_rule(Some("git * --amend"))), "{shell}: {command}");
     }
 
     #[rstest]

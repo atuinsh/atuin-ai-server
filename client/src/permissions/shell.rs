@@ -3,8 +3,50 @@
 pub struct ShellCommand {
     /// The command name (first word), e.g. "git"
     pub name: String,
-    /// The full invocation including arguments, e.g. "git commit -m msg"
+    /// The full invocation including arguments, without redirects, e.g. "git commit -m msg": the
+    /// command a deny or ask rule names.
     pub full: String,
+    /// The invocation with its redirects, e.g. "git commit -m msg > log": what an allow rule has
+    /// to cover, since a redirect writes a file the command alone doesn't.
+    pub redirected: String,
+}
+
+impl ShellCommand {
+    /// This command, matched with its redirects.
+    #[must_use]
+    pub fn as_redirected(&self) -> Self {
+        Self {
+            full: self.redirected.clone(),
+            ..self.clone()
+        }
+    }
+}
+
+/// `text` without its redirects (`> file`, `2>&1`, `<<< word`), word by word. Quoting isn't
+/// understood, so a quoted `>` also drops the word after it; that only matters to a pattern
+/// anchored past it.
+fn without_redirects(text: &str) -> String {
+    let mut words = text.split_whitespace();
+    let mut kept = Vec::new();
+    while let Some(word) = words.next() {
+        match redirect_operator_len(word) {
+            None => kept.push(word),
+            // The operator alone: its target is the next word.
+            Some(len) if len == word.len() => {
+                words.next();
+            }
+            Some(_) => {}
+        }
+    }
+    kept.join(" ")
+}
+
+/// The length of the redirect operator `word` starts with, after an optional descriptor number.
+fn redirect_operator_len(word: &str) -> Option<usize> {
+    const OPERATORS: [&str; 10] = ["&>>", "<<<", "&>", ">>", "<<", ">&", "<&", ">|", ">", "<"];
+    let rest = word.trim_start_matches(|c: char| c.is_ascii_digit());
+    let digits = word.len() - rest.len();
+    OPERATORS.iter().find(|op| rest.starts_with(**op)).map(|op| digits + op.len())
 }
 
 /// A parsed shell command with all subcommands extracted.
@@ -109,11 +151,12 @@ mod ts {
     fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // A `command` node has children like:
         //   variable_assignment* command_name argument* redirect*
-        // We want the command_name, its arguments and its redirects (skipping assignments): a
-        // redirect writes a file the command alone doesn't, so an exact rule mustn't ignore it.
+        // We want the command_name and all arguments (skipping assignments and redirects), and
+        // separately with its redirects.
         let mut name = None;
         let mut name_start = None;
         let mut arg_end = None;
+        let mut redirect_end = None;
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -131,33 +174,40 @@ mod ts {
                 | "expansion"
                 | "arithmetic_expansion"
                 | "ansi_c_string"
-                | "process_substitution"
-                | "file_redirect"
-                | "heredoc_redirect"
-                | "herestring_redirect" => {
+                | "process_substitution" => {
                     arg_end = Some(child.end_byte());
+                }
+                "file_redirect" | "heredoc_redirect" | "herestring_redirect" => {
+                    redirect_end = Some(child.end_byte());
                 }
                 _ => {}
             }
         }
         // Redirects after the command belong to the `redirected_statement` it is the body of.
-        let arg_end = match node.parent() {
+        let redirect_end = match node.parent() {
             Some(parent)
                 if parent.kind() == "redirected_statement" && parent.child(0) == Some(node) =>
             {
                 Some(parent.end_byte())
             }
-            _ => arg_end,
+            _ => redirect_end.max(arg_end),
         };
 
         let name = name?;
-        let full = if let (Some(start), Some(end)) = (name_start, arg_end) {
-            std::str::from_utf8(&source[start..end]).ok()?.to_string()
-        } else {
-            name.clone()
+        let text = |end: Option<usize>| match (name_start, end) {
+            (Some(start), Some(end)) => {
+                std::str::from_utf8(&source[start..end]).ok().map(str::to_string)
+            }
+            _ => Some(name.clone()),
         };
+        let full = text(arg_end)?;
+        let redirected = text(redirect_end)?;
 
-        Some(ShellCommand { name, full })
+        Some(ShellCommand {
+            name,
+            full,
+            redirected,
+        })
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -212,10 +262,15 @@ mod ts {
         }
 
         let name = name?;
-        // Get the full text of the command node
-        let full = node.utf8_text(source).ok()?.trim().to_string();
+        // The command node's text includes its redirects.
+        let redirected = node.utf8_text(source).ok()?.trim().to_string();
+        let full = super::without_redirects(&redirected);
 
-        Some(ShellCommand { name, full })
+        Some(ShellCommand {
+            name,
+            full,
+            redirected,
+        })
     }
 } // mod ts
 
@@ -272,7 +327,8 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
     {
         commands.push(ShellCommand {
             name: name.to_string(),
-            full: trimmed.to_string(),
+            full: without_redirects(trimmed),
+            redirected: trimmed.to_string(),
         });
     }
     segment.clear();
@@ -439,7 +495,7 @@ mod tests {
     #[case::fallback_pipe(ShellKind::Other, "ls | grep foo", &["ls", "grep"], Some(&["ls", "grep foo"][..]))]
     #[case::fallback_newline(ShellKind::Other, "git status\nrm -rf x", &["git", "rm"], None)]
     #[case::fallback_background(ShellKind::Other, "git status & rm -rf x", &["git", "rm"], None)]
-    #[case::fallback_redirects_stay(ShellKind::Other, "make 2>&1 &> log", &["make"], Some(&["make 2>&1 &> log"][..]))]
+    #[case::fallback_redirects_split_off(ShellKind::Other, "make 2>&1 &> log", &["make"], Some(&["make"][..]))]
     #[case::fallback_line_continuation(ShellKind::Other, "git \\\ncommit", &["git"], Some(&["git commit"][..]))]
     fn parse_exact(
         #[case] kind: ShellKind,
@@ -468,6 +524,17 @@ mod tests {
         for name in expected {
             assert!(n.contains(name), "should contain {name}: {n:?}");
         }
+    }
+
+    #[rstest]
+    #[case::separate_target("git status > out.log --short", "git status --short")]
+    #[case::attached_target("make 2>err.log", "make")]
+    #[case::descriptor_dup("make 2>&1 &> log", "make")]
+    #[case::input("sort < names.txt", "sort")]
+    #[case::here_string("cat <<< hello", "cat")]
+    #[case::number_argument("head -n 3", "head -n 3")]
+    fn without_redirects_cases(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(without_redirects(text), expected);
     }
 
     // Scope matching table. `any_subcommand_matches` does not use tree-sitter,
@@ -519,6 +586,7 @@ mod tests {
             .map(|(n, f)| ShellCommand {
                 name: (*n).into(),
                 full: (*f).into(),
+                redirected: (*f).into(),
             })
             .collect();
         assert_eq!(any_subcommand_matches(&cmds, prefix_bare, scope), expected);
