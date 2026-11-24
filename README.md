@@ -4,8 +4,8 @@ Atuin AI is a self-hosted terminal-first AI agent.
 
 > [!NOTE]
 >
-> Atuin AI is in low-maintenance mode. Security concerns addressed, however, Atuin Inc. no longer
-> provides an official, managed server.
+> Atuin AI is in low-maintenance mode. Security concerns are addressed, however, Atuin Inc. no
+> longer provides an official, managed server. You must self-host Atuin AI.
 
 ![Atuin AI suggesting a command, then rebuilding a Docker image from shell history](res/demo.gif)
 
