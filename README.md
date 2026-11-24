@@ -56,8 +56,13 @@ cp server/config.example.toml config.toml
 docker run \
   -v ./config.toml:/etc/atuin-ai/config.toml \
   -p 8080:8080 \
+  --add-host host.docker.internal:host-gateway \
   ghcr.io/atuinsh/atuin-ai-server:latest
 ```
+
+The example config reaches Ollama on the Docker host through `host.docker.internal`. On Linux,
+that name is the Docker bridge rather than loopback, and Ollama only listens on loopback by
+default: start Ollama with `OLLAMA_HOST=0.0.0.0`, and keep port 11434 off the public network.
 
 #### Authentication
 

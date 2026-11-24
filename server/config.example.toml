@@ -1,8 +1,9 @@
 # The port the service is started on.
 port = 8080
 
-# OpenAI-compatible chat completions endpoint.
-endpoint = "http://localhost:11434/v1"
+# OpenAI-compatible chat completions endpoint. host.docker.internal reaches the
+# Docker host from inside the server's container; outside Docker, use localhost.
+endpoint = "http://host.docker.internal:11434/v1"
 # The default model used, via the `alias` key in the models section.
 default_model = "llama"
 
